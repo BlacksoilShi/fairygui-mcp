@@ -96,9 +96,34 @@ now explicitly opens those tabs before waiting. Pagination preserves native stri
 kinds rather than coercing them to numbers/null. Delayed ping replies cannot reduce a
 client's observed revision within a session; a new session resets that revision.
 
+## Native relation/layout tools (development2)
+
+`relation_list({pkg,name,objectId,offset?,limit?})` reads direct-child geometry and bounded
+relation groups. `relation_set({... ,targetId,definitions:[{type,percent?}]})` replaces the
+whole group for **one target only**; `relation_remove({... ,targetId})` removes that group.
+`targetId` is `$parent` or a direct sibling ID. Nested children and root-to-child relations
+are not yet exposed. Read native object IDs with `list_children`, not display names.
+
+Definitions use editor names such as `Width`, `Height`, `Left_Left`, `Top_Top`, `Size`.
+They map through `FairyEditor.FRelationType`, **not runtime FairyGUI.RelationType**:
+editor Width is11, Height23, Top_Top12. Size expands to Width+Height; duplicate expanded
+definitions are rejected. Native `FRelationItem.AddDef` creates the descriptor grammar.
+Percent defaults to false. A target group replacement never means merging definitions.
+
+Self/cyclic dependencies, disabled/read-only relations, dirty documents, unknown IDs/types
+and graph inspection above256 objects/1,024 edges are rejected before mutation. Writes
+participate in session revision checks. Native readback and the post-save dirty flag are
+checked; partial failures are not replayed or automatically undone. Native Undo is unverified.
+
+Native graph fixtures test parent size deltas, group replacement, percent scaling, sibling
+movement, removal stopping propagation, XML persistence and behavior after editor restart.
+Text with native autoSize may reflow on reopen; this API does not override text auto-sizing.
+Offset lists are not immutable snapshots; restart after revision/external edits.
+
 ## Remaining goal scope
 
 Other editor versions and untested APIs still require actual execution; declarations alone are not compatibility proof.
-Transition and relation APIs are mapped from shipped declarations but not yet exposed and verified.
+Transition APIs are mapped from shipped declarations but not yet exposed and verified.
+Relations currently cover direct-child parent/sibling groups; nested/inherited behavior remains separate.
 Controller actions/gear editing and deeper page editing remain beyond the initial five tools.
 These are active work, not implied by existing tests.

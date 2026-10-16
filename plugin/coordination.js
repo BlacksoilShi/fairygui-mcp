@@ -1,5 +1,5 @@
 // Native queue is the cross-process authority. A Node-process mutex is not enough.
-var WRITE_COMMANDS=["controller_create","controller_update","controller_select","controller_remove","create_component","delete_item","insert_object","set_property","remove_object","save_all","refresh","publish","close_doc"];
+var WRITE_COMMANDS=["relation_set","relation_remove","controller_create","controller_update","controller_select","controller_remove","create_component","delete_item","insert_object","set_property","remove_object","save_all","refresh","publish","close_doc"];
 var Coordination={revision:0,cursors:Object.create(null),serial:0};
 function mutates(cmd){return WRITE_COMMANDS.indexOf(cmd)>=0;}
 function claimWrite(job){

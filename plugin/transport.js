@@ -25,7 +25,7 @@ function stepPublish(job) {
     detachPublish(job);return out;
 }
 var ASYNC_STARTERS={publish:startPublish},ASYNC_STEPPERS={publish:stepPublish};
-var DOCUMENT_COMMANDS=["controller_list","controller_create","controller_update","controller_select","controller_remove","open_doc","list_children","insert_object","set_property","remove_object"];
+var DOCUMENT_COMMANDS=["relation_list","relation_set","relation_remove","controller_list","controller_create","controller_update","controller_select","controller_remove","open_doc","list_children","insert_object","set_property","remove_object"];
 function utf8Length(s) { var n=0;for(var i=0;i<s.length;i++){var c=s.charCodeAt(i);if(c<128)n++;else if(c<2048)n+=2;else if(c>=0xd800&&c<=0xdbff&&i+1<s.length&&s.charCodeAt(i+1)>=0xdc00&&s.charCodeAt(i+1)<=0xdfff){n+=4;i++;}else n+=3;}return n; }
 function stamp(out,job) {out.requestId=job && job.requestId || null;out.sessionId=SESSION;if(out.revision===undefined)out.revision=Coordination.revision;return out;}
 function writeResponse(ctx,status,out,job) {
