@@ -1,0 +1,14 @@
+{
+  "name": "fairygui-mcp",
+  "version": "0.4.0",
+  "private": true,
+  "description": "Project-scoped MCP bridge for the original FairyGUI editor with an optional reconstruction backend",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node server.mjs",
+    "build:plugin": "node scripts/build-plugin.mjs",
+    "test": "node scripts/build-plugin.mjs --check && node tests/test_lines.mjs && node tests/test_server_transport.mjs && node tests/test_standalone.mjs && node plugin/tests/offline.cjs"
+  }
+}

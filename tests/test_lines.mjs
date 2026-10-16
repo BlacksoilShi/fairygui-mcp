@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import {PassThrough} from 'node:stream';
+import {readLines} from '../lib/lines.mjs';
+const stream=new PassThrough();const lines=[];let large=0,ended=false;
+readLines(stream,{maxBytes:8,onLine:s=>lines.push(s),onOversize:()=>large++,onEnd:()=>{ended=true;}});
+stream.write(Buffer.from('12'));stream.write(Buffer.from('34\n'));
+stream.write(Buffer.from('😀').subarray(0,2));stream.write(Buffer.from('😀').subarray(2));stream.write('\n');
+for(let i=0;i<1000;i++)stream.write(Buffer.alloc(1000,65));
+assert.equal(large,1,'oversize detected before newline');
+stream.write('\nok\r\n12345678\n');stream.end('tail');
+await new Promise(r=>stream.on('end',r));
+assert.deepEqual(lines,['1234','😀','ok\r','12345678','tail']);assert(ended);
+console.log('Line framing: 3 checks passed (chunked UTF8, bounded pre-newline input, recovery/EOF)');
