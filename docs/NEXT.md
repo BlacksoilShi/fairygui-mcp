@@ -120,10 +120,70 @@ movement, removal stopping propagation, XML persistence and behavior after edito
 Text with native autoSize may reflow on reopen; this API does not override text auto-sizing.
 Offset lists are not immutable snapshots; restart after revision/external edits.
 
+## Native transitions (development3)
+
+Seven tools, original editor API, no reconstruction dependency:
+
+- `transition_list({pkg,name,transition?,offset?,limit?})`: omit transition for summaries;
+  include it for keyframes. Continue `nextOffset`; pages are not snapshots.
+- `transition_create({pkg,name,transition})`: empty named transition. The native non-null
+  AddTransition name argument is ignored on tested versions; the bridge creates with the
+  default name then calls the native property facade to name it. Duplicate names fail.
+- `transition_update({... ,settings:{frameRate?,autoPlay?,autoPlayRepeat?,autoPlayDelay?}})`:
+  changes specified metadata only. Frame rate1..120, finite repeats1..100, delay0..60 seconds.
+- `transition_keyframe_set({... ,targetId,type,frame,values,tween?,label?})`: upsert one tuple
+  (direct child ID, type, frame), not blind append. XY/Size/Scale/Skew take `[x,y]`;
+  Alpha/Rotation take `[number]`. Frames0..36000. Values are bounded finite numbers;
+  native encoding uses three-decimal precision, and mismatched decoding is rejected.
+- `transition_keyframe_remove({... ,targetId,type,frame})`: remove exactly that tuple.
+- `transition_remove({...})`: remove named transition; inspect action references first.
+- `transition_sample({... ,frame,targetIds:[id,...]})`: synchronous native edit-mode sample
+  of1..20 direct children. It returns observed `samples`, `restoredSamples`,
+  `checkedStateRestored` and the exact categories of checked fields. No save occurs.
+
+Create the endpoint first, then the starting keyframe with `tween:true`. Native tweening
+pairs the next strictly later frame on the same target/type track, not the next global
+keyframe. Duplicate tuples and missing endpoints fail before document mutation. Deleting
+an endpoint still used by a tween is rejected. Saved XML can fold endpoints into
+`startValue`, `endValue`, `duration`; the read API returns expanded editor keyframes.
+
+Editing is bounded to1,000 keyframes,100 transitions, and only the six numeric types above.
+Preexisting Sound/Transition/Animation or other actions, paths, custom easing, partial or
+percentage values, missing/incompatible targets, and unsupported ranges are rejected
+rather than silently changed. Other transition names remain untouched. Metadata and keyframe
+clones are compared to the original before editing, then read back after the native update.
+Native metadata may contain additional fields that are preserved, not editable through this API.
+
+Document.UpdateTransition operates on the *active timeline*, not the XML name. The bridge
+rejects an already-active timeline or dirty document, enters the requested timeline,
+checks its identity, applies the draft, exits/restores the native design snapshot, then saves.
+There is no guaranteed ordinary Undo, transaction, or automatic rollback after partial failure.
+A save with `isModified` still set is an error. Runtime tests additionally read saved XML and
+restart the process to check persistence. Editor exceptions require fresh inspection, not retries.
+
+`head` and RefreshTransition defer evaluation; they are not synchronous sampling APIs.
+Sampling instead uses zero-duration native edit-mode playback, explicitly stops all retained
+tweeners, and exits the timeline. Edit mode alone does not disable Sound/nested actions,
+so the full transition is checked before playback. Internal restore verification covers
+at most2,000 direct children plus root geometry, scale, skew, rotation, alpha, pivot,
+visibility and gear locks, root-controller selected indices, clean document, exited timeline,
+no playback and no retained tweeners. It is not a promise about every nested object or field.
+Cleanup and verification also run after playback exceptions; an unconfirmed cleanup reports
+TRANSITION_RESTORE_FAILED. Sampling participates in revision coordination despite not saving.
+
+Native scenarios on6.1.4 and6.0.5 use two graph children and two transitions, modify all six numeric
+tween tracks and remove a single Rotation keyframe, read bounded pages, reject orphan endpoints and unknown
+targets, verify XML/design geometry, restart, edit again, and delete the fixture. Native
+sampling checks start/mid/end interpolation, unchanged sibling, restored design coordinates,
+and unchanged XML. Size/Scale/Skew/Rotation endpoint values and all six tracks surviving
+restart are also verified. Complex actions/paths/easing and native Undo remain open work.
+
 ## Remaining goal scope
 
-Other editor versions and untested APIs still require actual execution; declarations alone are not compatibility proof.
-Transition APIs are mapped from shipped declarations but not yet exposed and verified.
-Relations currently cover direct-child parent/sibling groups; nested/inherited behavior remains separate.
+Other versions and untested APIs require actual execution; declarations alone are not compatibility proof.
+Relations cover direct-child parent/sibling groups; nested/inherited behavior remains separate.
 Controller actions/gear editing and deeper page editing remain beyond the initial five tools.
+Complex transition tracks, native exception recovery and broader legacy-tool compatibility
+need further native tests. Matching server/plugin deployment and
+release audit are still required; local development does not imply publication or client reload.
 These are active work, not implied by existing tests.

@@ -2,7 +2,7 @@
   "name": "fgui-agent-bridge-custom",
   "displayName": "FairyGUI Agent Bridge Custom",
   "description": "MIT fork of wingcd/fairygui-agent-bridge; authenticated project-scoped loopback MCP transport",
-  "version": "0.5.0-dev.2",
+  "version": "0.5.0-dev.3",
   "author": {
     "name": "fgui-agent-bridge contributors"
   },
