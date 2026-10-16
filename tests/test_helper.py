@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 import tempfile
 import time
+import struct
+import zlib
 import unittest
 from unittest.mock import patch
 
@@ -77,6 +79,37 @@ class HelperTests(unittest.TestCase):
         if os.name!='nt':self.skipTest('Windows launcher')
         with patch.object(self.helper,'ping',return_value={'ready':True}),patch.object(self.helper,'install') as install,patch.object(h.subprocess,'Popen') as popen:
             self.assertTrue(self.helper.start()['attached']);install.assert_not_called();popen.assert_not_called()
+
+    def png(self, color=6, raw=None):
+        def chunk(kind,data):return struct.pack('>I',len(data))+kind+data+struct.pack('>I',zlib.crc32(kind+data)&0xffffffff)
+        bands=4 if color==6 else 3
+        raw=raw if raw is not None else b'\x00'+bytes([123]*(bands*2))
+        data=b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',2,1,8,color,0,0,0))+chunk(b'IDAT',zlib.compress(raw))+chunk(b'IEND',b'')
+        file=self.root/'screens/test.png';file.parent.mkdir(exist_ok=True);file.write_bytes(data)
+        return file
+    def test_verify_rgba_png(self):
+        f=self.png();out=self.helper.verify_screenshot({'path':str(f)})
+        self.assertEqual((out['width'],out['height']),(2,1));self.assertTrue(out['verified'])
+    def test_verify_rgb_png(self):
+        f=self.png(color=2);self.assertTrue(self.helper.verify_screenshot({'path':str(f)})['verified'])
+    def test_png_crc_rejected(self):
+        f=self.png();data=bytearray(f.read_bytes());data[20]^=1;f.write_bytes(data)
+        with self.assertRaises(ValueError):self.helper.verify_screenshot({'path':str(f)})
+    def test_png_truncated_rejected(self):
+        f=self.png();f.write_bytes(f.read_bytes()[:-3])
+        with self.assertRaises(ValueError):self.helper.verify_screenshot({'path':str(f)})
+    def test_png_extra_bytes_rejected(self):
+        f=self.png();f.write_bytes(f.read_bytes()+b'junk')
+        with self.assertRaises(ValueError):self.helper.verify_screenshot({'path':str(f)})
+    def test_png_decompressed_size_rejected(self):
+        f=self.png(raw=b'\x00'*1000)
+        with self.assertRaises(ValueError):self.helper.verify_screenshot({'path':str(f)})
+    def test_png_bad_filter_rejected(self):
+        f=self.png(raw=b'\x05'+bytes(8))
+        with self.assertRaises(ValueError):self.helper.verify_screenshot({'path':str(f)})
+    def test_png_path_escape_rejected(self):
+        f=self.png()
+        with self.assertRaises(h.HelperError):self.helper.verify_screenshot({'path':str(self.project/'test.png')})
 
 if __name__=='__main__':
     (ROOT/'tests/tmp').mkdir(parents=True,exist_ok=True)

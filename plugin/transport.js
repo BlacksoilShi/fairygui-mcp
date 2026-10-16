@@ -25,9 +25,9 @@ function stepPublish(job) {
     detachPublish(job);return out;
 }
 var ASYNC_STARTERS={publish:startPublish},ASYNC_STEPPERS={publish:stepPublish};
-var DOCUMENT_COMMANDS=["open_doc","list_children","insert_object","set_property","remove_object"];
+var DOCUMENT_COMMANDS=["controller_list","controller_create","controller_update","controller_select","controller_remove","open_doc","list_children","insert_object","set_property","remove_object"];
 function utf8Length(s) { var n=0;for(var i=0;i<s.length;i++){var c=s.charCodeAt(i);if(c<128)n++;else if(c<2048)n+=2;else if(c>=0xd800&&c<=0xdbff&&i+1<s.length&&s.charCodeAt(i+1)>=0xdc00&&s.charCodeAt(i+1)<=0xdfff){n+=4;i++;}else n+=3;}return n; }
-function stamp(out,job) {out.requestId=job && job.requestId || null;out.sessionId=SESSION;return out;}
+function stamp(out,job) {out.requestId=job && job.requestId || null;out.sessionId=SESSION;if(out.revision===undefined)out.revision=Coordination.revision;return out;}
 function writeResponse(ctx,status,out,job) {
     out=stamp(out,job);
     var body=JSON.stringify(out);
@@ -87,21 +87,22 @@ function pumpAccepts() {
 }
 function validateEnvelope(msg) {
     if(!object(msg))throw bridgeError("INVALID_REQUEST","Object body required");
-    Object.keys(msg).forEach(function(k){if(["cmd","args","requestId","sessionId","deadlineMs"].indexOf(k)<0)throw bridgeError("INVALID_REQUEST","Unexpected envelope key");});
+    Object.keys(msg).forEach(function(k){if(["cmd","args","requestId","sessionId","deadlineMs","expectedRevision"].indexOf(k)<0)throw bridgeError("INVALID_REQUEST","Unexpected envelope key");});
     if(typeof msg.requestId!=="string" || !UUID.test(msg.requestId))throw bridgeError("INVALID_REQUEST","UUID requestId required");
     if(typeof msg.cmd!=="string" || !Object.prototype.hasOwnProperty.call(ARG_KEYS,msg.cmd))throw bridgeError("COMMAND_NOT_ALLOWED","Unknown command");
     if(msg.cmd!=="ping" && msg.sessionId!==SESSION)throw bridgeError("SESSION_MISMATCH","Fresh ping sessionId required; no operation executed");
     if(msg.cmd==="ping" && msg.sessionId!==undefined && msg.sessionId!==SESSION)throw bridgeError("SESSION_MISMATCH","Stale ping sessionId");
     if(!Number.isSafeInteger(msg.deadlineMs)||msg.deadlineMs<=Date.now())throw bridgeError("DEADLINE_EXCEEDED","Request expired; no operation executed");
+    if(mutates(msg.cmd)&&(!Number.isSafeInteger(msg.expectedRevision)||msg.expectedRevision<0))throw bridgeError("REVISION_REQUIRED","Mutations require an observed project revision");
     validateArgs(msg.cmd,msg.args);
     if(msg.cmd!=="ping")assertProject();
 }
 function enqueue(ctx,msg) {
-    var job={ctx:ctx,cmd:msg.cmd,args:msg.args,requestId:msg.requestId,deadline:Math.min(msg.deadlineMs,Date.now()+LIMIT.maxMs),phase:"queued"};
+    var job={ctx:ctx,cmd:msg.cmd,args:msg.args,requestId:msg.requestId,deadline:Math.min(msg.deadlineMs,Date.now()+LIMIT.maxMs),phase:"queued",expectedRevision:msg.expectedRevision};
     validateEnvelope(msg);
     // Dynamic ping is read-only and deliberately uncached: liveness remains available while publish is busy.
     if(job.cmd==="ping"){writeResponse(ctx,200,COMMANDS.ping(job.args),job);return;}
-    var fingerprint=JSON.stringify({cmd:job.cmd,args:job.args}),seen=Bridge.seen[job.requestId];
+    var fingerprint=JSON.stringify({cmd:job.cmd,args:job.args,expectedRevision:job.expectedRevision}),seen=Bridge.seen[job.requestId];
     if(seen){
         if(seen.fingerprint!==fingerprint)writeResponse(ctx,409,fail("requestId reused with different operation","REQUEST_ID_REUSED"),job);
         else if(seen.response)writeResponse(ctx,200,seen.response,job);
@@ -147,6 +148,7 @@ function pumpReaders() {
     }
 }
 function complete(job,out) {
+    if(job.writeClaimed)Coordination.revision++;
     var sent=writeResponse(job.ctx,200,out,job),seen=Bridge.seen[job.requestId];
     seen.done=true;seen.response=sent;Bridge.completed.push(job.requestId);
     if(Bridge.completed.length>LIMIT.cache){var evicted=Bridge.completed.shift();Bridge.seen[evicted].response=null;}
@@ -175,10 +177,11 @@ function stepQueue() {
             if(job.phase==="post-create-wait"){complete(job,job.result);return;}
             execute(job);return;
         }
+        claimWrite(job);
         if(job.cmd==="publish"){job.phase="publish-wait";startPublish(job);return;}
         if(DOCUMENT_COMMANDS.indexOf(job.cmd)>=0){job.opened=ensureDocOpen(getPkg(job.args.pkg),job.args.name);job.phase="document-wait";job.openFrame=Bridge.frame;return;}
         execute(job);
-    }catch(e){if(job.handler)detachPublish(job);plog(e.bridgeCode || "EDITOR_API_ERROR");complete(job,fail(e.bridgeCode?e.message:"Editor API call failed; operation may be partially applied and will not be replayed",e.bridgeCode || "EDITOR_API_ERROR"));}
+    }catch(e){if(job.handler)detachPublish(job);plog(e.bridgeCode || "EDITOR_API_ERROR",e);complete(job,fail(e.bridgeCode?e.message:"Editor API call failed; operation may be partially applied and will not be replayed",e.bridgeCode || "EDITOR_API_ERROR"));}
 }
 function startServer() {
     if(Bridge.listener || !Config)return;

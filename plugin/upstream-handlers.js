@@ -41,7 +41,8 @@ function requireComponentItem(pkg, compName) {
 function ensureDocOpen(pkg, compName) {
     var item = requireComponentItem(pkg, compName), url = itemUrl(pkg,item);
     var doc = App.docView.FindDocument(url);
-    if (doc == null) doc = App.docView.OpenDocument(url,true);
+    // Restored inactive tabs can exist before their document content is loaded.
+    if (doc == null || doc.content == null) doc = App.docView.OpenDocument(url,true);
     if (doc == null) throw bridgeError("DOCUMENT_OPEN_FAILED", "OpenDocument returned no document");
     return {doc:doc,item:item,url:url};
 }
@@ -80,7 +81,7 @@ var COMMANDS = {};
 
 COMMANDS.ping = function (a) {
     return ok({
-        version: VERSION,
+        version: VERSION,revision:Coordination.revision,coordination:"optimistic-revision-v1",
         frame: Bridge.frame, updatedAtMs: Bridge.updatedAtMs, sessionId: SESSION,
         ready: projectAllowed(), busy: Bridge.current != null,
         backgroundPolicy: backgroundPolicy(),
@@ -246,17 +247,37 @@ COMMANDS.save_all = function (a) {
 };
 
 COMMANDS.refresh = function (a) {
+    if(App.docView.HasUnsavedDocuments())throw bridgeError("UNSAVED_DOCUMENTS","Save or discard documents before refresh");
     App.RefreshProject();
     return ok({ refreshed: true });
 };
 
 COMMANDS.screenshot = function(a) {
-    var destination = a.path || Config.screenshotDir + "/capture.png";
-    requireWithin(destination, Config.screenshotDir);
-    if (!/\.png$/i.test(destination)) throw bridgeError("PATH_NOT_ALLOWED", "Screenshot must be png within configured directory");
-    CS.System.IO.Directory.CreateDirectory(Config.screenshotDir);
-    CS.UnityEngine.ScreenCapture.CaptureScreenshot(String(destination));
-    return ok({screenshot:destination,async:true,verified:false});
+    var destination=a.path || Config.screenshotDir+"/capture.png";
+    requireWithin(destination,Config.screenshotDir);
+    if(!/\.png$/i.test(destination))throw bridgeError("PATH_NOT_ALLOWED","Screenshot must be PNG");
+    if(CS.System.IO.File.Exists(destination))throw bridgeError("OUTPUT_EXISTS","Use a new screenshot path; existing images are preserved");
+    var display=App.groot && App.groot.displayObject,texture=null,image=null;
+    if(!display || typeof display.GetScreenShot!=="function")throw bridgeError("CAPTURE_UNSUPPORTED","Editor root display screenshot API is unavailable");
+    try {
+        var w=Math.ceil(Number(App.groot.width)),h=Math.ceil(Number(App.groot.height));
+        if(w<=0||h<=0||w>4096||h>4096)throw bridgeError("CAPTURE_SIZE","Editor root must be at most4096x4096");
+        texture=display.GetScreenShot(null,1);
+        w=Number(texture.width);h=Number(texture.height);var format=Number(texture.format),bands=format===4?4:format===3?3:0;
+        if(!bands||w<=0||h<=0||w>4096||h>4096)throw bridgeError("CAPTURE_FORMAT","Expected bounded RGB24 or RGBA32 texture");
+        var raw=texture.GetRawTextureData(),stride=w*bands;
+        if(Number(raw.Length)!==stride*h)throw bridgeError("CAPTURE_FORMAT","Unexpected raw pixel length");
+        // Unity pixel rows start at bottom-left; VImage rows start at top-left.
+        var flipped=CS.System.Array.CreateInstance(require("puerts").$typeof(CS.System.Byte),stride*h);
+        for(var y=0;y<h;y++)CS.System.Array.Copy(raw,(h-y-1)*stride,flipped,y*stride,stride);
+        image=FairyEditor.VImage.New(flipped,w,h,bands===4);
+        CS.System.IO.Directory.CreateDirectory(Config.screenshotDir);
+        image.Save(destination);
+        return ok({screenshot:destination,width:w,height:h,method:"editor-root-display",scope:"Editor UI content only, not desktop/window chrome",async:false,verified:false});
+    }finally{
+        if(image)try{image.Dispose();}catch(error){plog("CAPTURE_DISPOSE_FAILED",error);}
+        if(texture)try{CS.UnityEngine.Object.Destroy(texture);}catch(error){plog("CAPTURE_TEXTURE_RELEASE_FAILED",error);}
+    }
 };
 
 // internal for tests: expose bridge log tail

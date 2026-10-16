@@ -179,7 +179,7 @@ TOOLS.remove_object.inputSchema=closed({...pkgName,target:str(256)},['pkg','name
 TOOLS.publish.inputSchema=closed({pkg:str(),branch:{type:'string',maxLength:64,pattern:'^[A-Za-z0-9_-]*$'},out_path:{type:'string',const:config.publishDir},timeout_ms:integer(1000,120000)},['pkg']);
 TOOLS.publish.description='Publish via original editor API; require native success and reopen/hash fresh package output. Artifact verification, not full semantic decoding or byte-equality proof.';
 TOOLS.screenshot.inputSchema=closed({path:str(1024)},['path']);
-TOOLS.screenshot.description='Ask the configured editor ScreenCapture API for a PNG confined to screenshotDir. A trimmed API may return an explicit failure; no OS capture fallback is silently substituted.';
+TOOLS.screenshot.description='Capture the editor root UI through its native display API, save PNG and validate the file; excludes desktop and window chrome.';
 TOOLS.bridge_log.inputSchema=closed({tail:integer(1,100)});
 TOOLS.discover_projects.description='Ping only the one explicitly configured project. Never reads a global registry or selects another editor.';
 TOOLS.editor_start={description:'Start or attach only the configured normal-GUI original editor through the local helper; no headless/license bypass.',inputSchema:closed()};
@@ -193,9 +193,16 @@ const sourceColor={type:'string',minLength:7,maxLength:9,pattern:'^#[0-9A-Fa-f]{
 const sourceProps=closed({xy:sourcePair(int32),size:sourcePair(nonnegativeInt32),text,fontSize:integer(1,32767),color:sourceColor,lineSize:nonnegativeInt32,lineColor:sourceColor,fillColor:sourceColor});
 sourceProps.minProperties=1;
 TOOLS.source_property_set={description:'Modify fixed independent source Gesture/Main object n0 (rect graph) or n1 (text, default); integer xy/size arrays, text/fontSize/color, or graph lineSize/lineColor/fillColor. Same-call undo/redo then save. Not a live original-editor mutation.',inputSchema:closed({objectId:{type:'string',enum:['n0','n1'],default:'n1'},props:sourceProps,history:{type:'array',items:{type:'string',enum:['undo','redo']},maxItems:32}},['props'])};
+TOOLS.list_items_page={description:'Bounded depth-first flat resource pages. Single-use session cursor expires after60s; bridge mutations invalidate it. Prefer over list_items for large packages.',inputSchema:closed({pkg:str(),limit:integer(1,100),cursor:str(160)},['pkg'])};
+const controllerName={type:'string',minLength:1,maxLength:128,pattern:'^[^,\\r\\n]+$'};
+TOOLS.controller_list={description:'Read bounded live controller pages and stable page IDs; nextOffset continues (not a snapshot). Optional controller reads one by name. Opens the document.',inputSchema:closed({...pkgName,controller:controllerName,offset:integer(0,100000),limit:integer(1,100)},['pkg','name'])};
+TOOLS.controller_create={description:'Create a native controller, save, and read back generated page IDs. Rejects dirty documents and duplicate names.',inputSchema:closed({...pkgName,controller:controllerName,pages:{type:'array',items:controllerName,minItems:1,maxItems:100},exported:boolean},['pkg','name','controller','pages'])};
+TOOLS.controller_update={description:'Rename/export a controller or rename existing pages by stable ID. Preserves page IDs, actions and unedited fields. Saves through the native facade. Renaming may break native Undo; returned history warning applies.',inputSchema:closed({...pkgName,controller:controllerName,newName:controllerName,exported:boolean,pageNames:{type:'array',items:closed({id:str(),name:controllerName},['id','name']),minItems:1,maxItems:100}},['pkg','name','controller'])};
+TOOLS.controller_select={description:'Switch a live controller preview page through Document.SwitchPage; returns previous and observed selected index. Selection persistence is editor-defined.',inputSchema:closed({...pkgName,controller:controllerName,index:integer(0,99)},['pkg','name','controller','index'])};
+TOOLS.controller_remove={description:'Remove a controller via the native document API and save. This may remove linked gears/actions; inspect the component first.',inputSchema:closed({...pkgName,controller:controllerName},['pkg','name','controller'])};
 if(!config.sourceHelper)for(const name of Object.keys(TOOLS))if(name.startsWith('source_'))delete TOOLS[name];
-const readOnly=new Set(['discover_projects','ping','project_info','list_packages','list_items','read_component','bridge_log','source_inspect']);
-for(const [name,tool] of Object.entries(TOOLS))tool.annotations={readOnlyHint:readOnly.has(name),destructiveHint:!readOnly.has(name),idempotentHint:readOnly.has(name),openWorldHint:false};
+const readOnly=new Set(['discover_projects','ping','project_info','list_packages','list_items','list_items_page','read_component','bridge_log','source_inspect']);
+for(const [name,tool] of Object.entries(TOOLS))tool.annotations={readOnlyHint:readOnly.has(name),destructiveHint:!readOnly.has(name),idempotentHint:readOnly.has(name)&&name!=='list_items_page',openWorldHint:false};
 function sanitize(value){if(typeof value==='string')return value.replaceAll(config.token,'[redacted]');if(Array.isArray(value))return value.map(sanitize);if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,/token|authorization/i.test(k)?'[redacted]':sanitize(v)]));return value;}
 async function callBridge(cmd,args){
   if(cmd==='editor_start'){const data=await bridge.helper('start',{},45000);bridge.sessionId=null;return {ok:true,data};}
@@ -212,6 +219,7 @@ async function callBridge(cmd,args){
   const duration=cmd==='publish'?(args.timeout_ms??120000):30000;
   const startedAtMs=Date.now();
   const out=await bridge.http(cmd,args,duration);
+  if(cmd==='screenshot'){const verification=await bridge.helper('verify_screenshot',{path:args.path},15000);return {...out,data:{...out.data,verified:true,verification}};}
   if(cmd==='publish'){
     let verification;
     try{verification=await bridge.helper('verify_publish',{pkg:args.pkg,startedAtMs},15000);}
@@ -249,7 +257,7 @@ async function handle(req){
       const offered=req.params?.protocolVersion;
       if(typeof offered!=='string')return failure(req.id,-32602,'protocolVersion required');
       const versions=['2025-06-18','2025-03-26','2024-11-05'];
-      send({jsonrpc:'2.0',id:req.id,result:{protocolVersion:versions.includes(offered)?offered:versions[0],capabilities:{tools:{}},serverInfo:{name:'fgui-local-agent-bridge',version:'0.4.0'},instructions:'Single explicitly configured project. Native editor tools and independent source_* tools are separate execution layers.'}});
+      send({jsonrpc:'2.0',id:req.id,result:{protocolVersion:versions.includes(offered)?offered:versions[0],capabilities:{tools:{}},serverInfo:{name:'fgui-local-agent-bridge',version:'0.5.0-dev.1'},instructions:'Single explicitly configured project. Native editor tools and independent source_* tools are separate execution layers.'}});
     }else if(req.method==='tools/list')send({jsonrpc:'2.0',id:req.id,result:{tools:Object.entries(TOOLS).map(([name,t])=>({name,...t}))}});
     else if(req.method==='tools/call')await toolCall(req);
     else if(req.method==='ping')send({jsonrpc:'2.0',id:req.id,result:{}});

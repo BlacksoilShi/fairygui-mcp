@@ -4,7 +4,7 @@
 "use strict";
 var CS = require("csharp");
 var FairyGUI = CS.FairyGUI, FairyEditor = CS.FairyEditor, App = FairyEditor.App;
-var VERSION = "0.4.0";
+var VERSION = "0.5.0-dev.1";
 var PluginDir = String(App.pluginManager.basePath) + "/fgui-agent-bridge-custom";
 var Config = null;
 var SESSION = "custom-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
@@ -94,13 +94,16 @@ function validateItemUrl(url) {
     var pkg=App.project.GetPackage(url.slice(5,13));if(!pkg)throw bridgeError("OBJECT_NOT_ALLOWED","URL package not in current project");
     requireWithin(pkg.basePath,Config.projectPath);
 }
-var ARG_KEYS={ping:[],project_info:[],list_packages:[],list_items:["pkg","depth"],read_component:["pkg","name"],create_component:["pkg","name","width","height","path","exported","extention"],delete_item:["pkg","name"],open_doc:["pkg","name"],close_doc:["pkg","name"],list_children:["pkg","name"],insert_object:["pkg","name","url","ref_pkg","ref_name","x","y","index","props"],set_property:["pkg","name","target","props","prop","value"],remove_object:["pkg","name","target"],save_all:[],refresh:[],screenshot:["path"],bridge_log:["tail"],publish:["pkg","branch","out_path","timeout_ms"]};
+var ARG_KEYS={controller_list:["pkg","name","controller","offset","limit"],controller_create:["pkg","name","controller","pages","exported"],controller_update:["pkg","name","controller","newName","pageNames","exported"],controller_select:["pkg","name","controller","index"],controller_remove:["pkg","name","controller"],list_items_page:["pkg","limit","cursor"],ping:[],project_info:[],list_packages:[],list_items:["pkg","depth"],read_component:["pkg","name"],create_component:["pkg","name","width","height","path","exported","extention"],delete_item:["pkg","name"],open_doc:["pkg","name"],close_doc:["pkg","name"],list_children:["pkg","name"],insert_object:["pkg","name","url","ref_pkg","ref_name","x","y","index","props"],set_property:["pkg","name","target","props","prop","value"],remove_object:["pkg","name","target"],save_all:[],refresh:[],screenshot:["path"],bridge_log:["tail"],publish:["pkg","branch","out_path","timeout_ms"]};
 function validateArgs(cmd,a) {
     if(!object(a))throw bridgeError("INVALID_ARGUMENTS","args must be object");
     Object.keys(a).forEach(function(k){if(ARG_KEYS[cmd].indexOf(k)<0)throw bridgeError("INVALID_ARGUMENTS","Unsupported argument key");});
     ["pkg","name","ref_pkg","ref_name","target"].forEach(function(k){if(a[k]!==undefined && (typeof a[k]!=="string" || !a[k].length || a[k].length>256 || /[\u0000-\u001f]/.test(a[k])))throw bridgeError("INVALID_ARGUMENTS","Bounded nonempty identifier required");});
     if(ARG_KEYS[cmd].indexOf("pkg")>=0 && !a.pkg)throw bridgeError("INVALID_ARGUMENTS","pkg required");
     if(ARG_KEYS[cmd].indexOf("name")>=0 && !a.name)throw bridgeError("INVALID_ARGUMENTS","name required");
+    if(a.limit!==undefined && (!Number.isInteger(a.limit)||a.limit<1||a.limit>100))throw bridgeError("INVALID_ARGUMENTS","limit1..100 required");
+    if(a.cursor!==undefined && (typeof a.cursor!=="string"||a.cursor.length<1||a.cursor.length>160))throw bridgeError("INVALID_ARGUMENTS","Bounded cursor string required");
+    if(cmd.indexOf("controller_")===0)validateControllerArgs(cmd,a);
     if(a.props!==undefined)validateProps(a.props);
     if(a.prop!==undefined){var x={};x[a.prop]=a.value;validateProps(x);}
     ["width","height","x","y"].forEach(function(k){if(a[k]!==undefined && (typeof a[k]!=="number" || !Number.isFinite(a[k]) || Math.abs(a[k])>1000000))throw bridgeError("INVALID_ARGUMENTS","Finite bounded geometry required");});
@@ -158,7 +161,8 @@ function requireComponentItem(pkg, compName) {
 function ensureDocOpen(pkg, compName) {
     var item = requireComponentItem(pkg, compName), url = itemUrl(pkg,item);
     var doc = App.docView.FindDocument(url);
-    if (doc == null) doc = App.docView.OpenDocument(url,true);
+    // Restored inactive tabs can exist before their document content is loaded.
+    if (doc == null || doc.content == null) doc = App.docView.OpenDocument(url,true);
     if (doc == null) throw bridgeError("DOCUMENT_OPEN_FAILED", "OpenDocument returned no document");
     return {doc:doc,item:item,url:url};
 }
@@ -197,7 +201,7 @@ var COMMANDS = {};
 
 COMMANDS.ping = function (a) {
     return ok({
-        version: VERSION,
+        version: VERSION,revision:Coordination.revision,coordination:"optimistic-revision-v1",
         frame: Bridge.frame, updatedAtMs: Bridge.updatedAtMs, sessionId: SESSION,
         ready: projectAllowed(), busy: Bridge.current != null,
         backgroundPolicy: backgroundPolicy(),
@@ -363,17 +367,37 @@ COMMANDS.save_all = function (a) {
 };
 
 COMMANDS.refresh = function (a) {
+    if(App.docView.HasUnsavedDocuments())throw bridgeError("UNSAVED_DOCUMENTS","Save or discard documents before refresh");
     App.RefreshProject();
     return ok({ refreshed: true });
 };
 
 COMMANDS.screenshot = function(a) {
-    var destination = a.path || Config.screenshotDir + "/capture.png";
-    requireWithin(destination, Config.screenshotDir);
-    if (!/\.png$/i.test(destination)) throw bridgeError("PATH_NOT_ALLOWED", "Screenshot must be png within configured directory");
-    CS.System.IO.Directory.CreateDirectory(Config.screenshotDir);
-    CS.UnityEngine.ScreenCapture.CaptureScreenshot(String(destination));
-    return ok({screenshot:destination,async:true,verified:false});
+    var destination=a.path || Config.screenshotDir+"/capture.png";
+    requireWithin(destination,Config.screenshotDir);
+    if(!/\.png$/i.test(destination))throw bridgeError("PATH_NOT_ALLOWED","Screenshot must be PNG");
+    if(CS.System.IO.File.Exists(destination))throw bridgeError("OUTPUT_EXISTS","Use a new screenshot path; existing images are preserved");
+    var display=App.groot && App.groot.displayObject,texture=null,image=null;
+    if(!display || typeof display.GetScreenShot!=="function")throw bridgeError("CAPTURE_UNSUPPORTED","Editor root display screenshot API is unavailable");
+    try {
+        var w=Math.ceil(Number(App.groot.width)),h=Math.ceil(Number(App.groot.height));
+        if(w<=0||h<=0||w>4096||h>4096)throw bridgeError("CAPTURE_SIZE","Editor root must be at most4096x4096");
+        texture=display.GetScreenShot(null,1);
+        w=Number(texture.width);h=Number(texture.height);var format=Number(texture.format),bands=format===4?4:format===3?3:0;
+        if(!bands||w<=0||h<=0||w>4096||h>4096)throw bridgeError("CAPTURE_FORMAT","Expected bounded RGB24 or RGBA32 texture");
+        var raw=texture.GetRawTextureData(),stride=w*bands;
+        if(Number(raw.Length)!==stride*h)throw bridgeError("CAPTURE_FORMAT","Unexpected raw pixel length");
+        // Unity pixel rows start at bottom-left; VImage rows start at top-left.
+        var flipped=CS.System.Array.CreateInstance(require("puerts").$typeof(CS.System.Byte),stride*h);
+        for(var y=0;y<h;y++)CS.System.Array.Copy(raw,(h-y-1)*stride,flipped,y*stride,stride);
+        image=FairyEditor.VImage.New(flipped,w,h,bands===4);
+        CS.System.IO.Directory.CreateDirectory(Config.screenshotDir);
+        image.Save(destination);
+        return ok({screenshot:destination,width:w,height:h,method:"editor-root-display",scope:"Editor UI content only, not desktop/window chrome",async:false,verified:false});
+    }finally{
+        if(image)try{image.Dispose();}catch(error){plog("CAPTURE_DISPOSE_FAILED",error);}
+        if(texture)try{CS.UnityEngine.Object.Destroy(texture);}catch(error){plog("CAPTURE_TEXTURE_RELEASE_FAILED",error);}
+    }
 };
 
 // internal for tests: expose bridge log tail
@@ -414,6 +438,160 @@ function applyProps(obj, props) {
     return applied;
 }
 
+// Native queue is the cross-process authority. A Node-process mutex is not enough.
+var WRITE_COMMANDS=["controller_create","controller_update","controller_select","controller_remove","create_component","delete_item","insert_object","set_property","remove_object","save_all","refresh","publish","close_doc"];
+var Coordination={revision:0,cursors:Object.create(null),serial:0};
+function mutates(cmd){return WRITE_COMMANDS.indexOf(cmd)>=0;}
+function claimWrite(job){
+    if(!mutates(job.cmd)||job.writeClaimed)return;
+    if(job.expectedRevision!==Coordination.revision)throw bridgeError("REVISION_CONFLICT","Project changed after this client observed it; inspect fresh state before editing again");
+    // Conservative: even a partially failed operation invalidates old readers.
+    Coordination.cursors=Object.create(null);job.writeClaimed=true;
+}
+function pruneCursors(){
+    Object.keys(Coordination.cursors).forEach(function(k){if(Coordination.cursors[k].expires<=Date.now())delete Coordination.cursors[k];});
+}
+function itemFrame(item,depth,parentId){
+    var children=item.children;
+    return {item:item,id:String(item.id),depth:depth,parentId:parentId,emitted:false,index:0,count:children?Number(children.Count):0};
+}
+function pageRow(frame){
+    var i=frame.item;
+    return {id:String(i.id),name:String(i.name),type:typeof i.type==="number"?i.type:String(i.type),path:String(i.path||""),parentId:frame.parentId,depth:frame.depth,childCount:frame.count,width:Number(i.width),height:Number(i.height)};
+}
+COMMANDS.list_items_page=function(a){
+    pruneCursors();var state,pkg=getPkg(a.pkg),cursor=a.cursor,limit=a.limit||50;
+    if(cursor){
+        state=Coordination.cursors[cursor];
+        if(!state)throw bridgeError("CURSOR_EXPIRED","Cursor expired, was consumed, or was invalidated by an edit; restart pagination");
+        if(state.pkgId!==String(pkg.id))throw bridgeError("CURSOR_SCOPE","Cursor belongs to a different package");
+        delete Coordination.cursors[cursor];
+    }else{
+        if(Object.keys(Coordination.cursors).length>=16)throw bridgeError("CURSOR_CAPACITY","At most16 active traversals; finish or wait for expiry");
+        state={pkgId:String(pkg.id),revision:Coordination.revision,stack:[itemFrame(pkg.rootItem,0,null)],offset:0};
+    }
+    var rows=[],bytes=0,steps=0;
+    while(state.stack.length && rows.length<limit && steps++<512){
+        var f=state.stack[state.stack.length-1],ch=f.item.children;
+        if(String(f.item.id)!==f.id || (ch?Number(ch.Count):0)!==f.count)throw bridgeError("CURSOR_CHANGED","Resource tree changed during traversal; restart pagination");
+        if(!f.emitted){
+            var row=pageRow(f),size=utf8Length(JSON.stringify(row))+1;
+            if(size>45000)throw bridgeError("ITEM_TOO_LARGE","A single resource exceeds the bounded page size");
+            if(bytes+size>45000)break;
+            rows.push(row);bytes+=size;f.emitted=true;continue;
+        }
+        if(f.index>=f.count){state.stack.pop();continue;}
+        if(state.stack.length>=64)throw bridgeError("TREE_DEPTH_LIMIT","Resource tree depth exceeds64");
+        state.stack.push(itemFrame(ch.get_Item(f.index++),f.depth+1,f.id));
+    }
+    var start=state.offset;state.offset+=rows.length;var next=null;
+    if(state.stack.length){next=SESSION+"-page-"+(++Coordination.serial);state.expires=Date.now()+60000;Coordination.cursors[next]=state;}
+    return ok({items:rows,offset:start,nextCursor:next,done:next===null,revision:state.revision,expiresInMs:next?60000:0,
+        consistency:"Bridge writes invalidate cursors; observed ancestor identity/count changes are rejected. External GUI edits are not a transactional snapshot."});
+};
+// Native document facade owns serialization; history semantics are not guaranteed.
+function controllerText(v) {
+    return typeof v==="string" && v.length>0 && v.length<=128 && !/[,\u0000-\u001f\ufffe\uffff]/.test(v) && !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(v);
+}
+function validateControllerArgs(cmd,a) {
+    if(cmd==="controller_list"){
+        if(a.controller!==undefined&&!controllerText(a.controller))throw bridgeError("INVALID_ARGUMENTS","Invalid controller name");
+        if(a.offset!==undefined&&(!Number.isInteger(a.offset)||a.offset<0||a.offset>100000))throw bridgeError("INVALID_ARGUMENTS","Invalid controller offset");
+        return;
+    }
+    if(!controllerText(a.controller))throw bridgeError("INVALID_ARGUMENTS","Bounded controller name without commas required");
+    if(a.newName!==undefined&&!controllerText(a.newName))throw bridgeError("INVALID_ARGUMENTS","Invalid new controller name");
+    if(a.exported!==undefined&&typeof a.exported!=="boolean")throw bridgeError("INVALID_ARGUMENTS","exported must be boolean");
+    if(cmd==="controller_create") {
+        if(!Array.isArray(a.pages)||a.pages.length<1||a.pages.length>100||a.pages.some(function(x){return !controllerText(x);}))throw bridgeError("INVALID_ARGUMENTS","One to100 bounded page names required");
+        if(new Set(a.pages).size!==a.pages.length)throw bridgeError("INVALID_ARGUMENTS","Duplicate page names");
+    }
+    if(cmd==="controller_select"&&(!Number.isInteger(a.index)||a.index<0||a.index>99))throw bridgeError("INVALID_ARGUMENTS","index0..99 required");
+    if(cmd==="controller_update") {
+        if(a.newName===undefined&&a.exported===undefined&&a.pageNames===undefined)throw bridgeError("INVALID_ARGUMENTS","At least one update required");
+        if(a.pageNames!==undefined) {
+            if(!Array.isArray(a.pageNames)||a.pageNames.length<1||a.pageNames.length>100)throw bridgeError("INVALID_ARGUMENTS","Bounded pageNames required");
+            var seen=Object.create(null);
+            a.pageNames.forEach(function(p){if(!object(p)||Object.keys(p).length!==2||typeof p.id!=="string"||!p.id.length||p.id.length>128||!controllerText(p.name)||seen[p.id])throw bridgeError("INVALID_ARGUMENTS","Unique page IDs and valid names required");seen[p.id]=true;});
+        }
+    }
+}
+function saveControllerDoc(doc) {
+    App.docView.SaveDocument(doc);
+    if(doc.isModified)throw bridgeError("SAVE_NOT_CONFIRMED","Editor still marks document modified after save; inspect unsaved changes, do not retry automatically");
+}
+function controllerInfo(c) {
+    var pages=c.GetPages(),out=[];
+    if(pages.Count>100)throw bridgeError("RESULT_LIMIT","Controller has more than100 pages");
+    for(var i=0;i<pages.Count;i++){var p=pages.get_Item(i);out.push({id:String(p.id),name:String(p.name)});}
+    return {name:String(c.name),exported:!!c.exported,selectedIndex:Number(c.selectedIndex),pages:out};
+}
+function controllerDoc(a,method) {
+    var r=ensureDocOpen(getPkg(a.pkg),a.name);
+    if(method&&typeof r.doc[method]!=="function")throw bridgeError("CAPABILITY_UNSUPPORTED","Native controller document method missing: "+method);
+    if(method&&r.doc.isModified)throw bridgeError("UNSAVED_DOCUMENT","Save or discard document changes before controller editing");
+    return r.doc;
+}
+function requireController(doc,name) {
+    var c=doc.content.GetController(name);
+    if(!c)throw bridgeError("CONTROLLER_NOT_FOUND","Controller not found: "+name);
+    return c;
+}
+COMMANDS.controller_list=function(a) {
+    var doc=controllerDoc(a),list=doc.content.controllers,out=[],offset=a.offset||0,limit=a.limit||10,bytes=0;
+    if(a.controller)return ok({controllers:[controllerInfo(requireController(doc,a.controller))],nextOffset:null,total:1});
+    for(var i=offset;i<list.Count&&out.length<limit;i++){
+        var row=controllerInfo(list.get_Item(i)),size=utf8Length(JSON.stringify(row));
+        if(bytes+size>45000){if(!out.length)throw bridgeError("RESULT_LIMIT","One controller exceeds response budget");break;}
+        bytes+=size;out.push(row);
+    }
+    return ok({controllers:out,nextOffset:i<list.Count?i:null,total:Number(list.Count),consistency:"Offsets are not a snapshot; restart after revision or external changes"});
+};
+COMMANDS.controller_create=function(a) {
+    var doc=controllerDoc(a,"AddController");
+    if(doc.content.GetController(a.controller))throw bridgeError("CONTROLLER_EXISTS","Controller name exists");
+    if(doc.content.controllers.Count>=100)throw bridgeError("RESULT_LIMIT","At most100 controllers supported");
+    var draft=new FairyEditor.FController();draft.name=a.controller;
+    if(a.exported!==undefined)draft.exported=a.exported;
+    a.pages.forEach(function(name){draft.AddPage(name);});
+    doc.AddController(draft.Write());
+    var result=controllerInfo(requireController(doc,a.controller));
+    if(result.pages.length!==a.pages.length||result.pages.some(function(p,i){return p.name!==a.pages[i];}))throw bridgeError("CONTROLLER_READBACK","Native created controller differs; inspect partial changes");
+    saveControllerDoc(doc);return ok(result);
+};
+COMMANDS.controller_update=function(a) {
+    var doc=controllerDoc(a,"UpdateController"),current=requireController(doc,a.controller),name=a.newName||a.controller;
+    if(name!==a.controller&&doc.content.GetController(name))throw bridgeError("CONTROLLER_EXISTS","New name already exists");
+    // Clone via native XML; never rebuild IDs or discard opaque actions.
+    var draft=new FairyEditor.FController();draft.Read(current.Write());draft.name=name;
+    if(a.exported!==undefined)draft.exported=a.exported;
+    var pages=draft.GetPages(),byId=Object.create(null);
+    for(var i=0;i<pages.Count;i++)byId[String(pages.get_Item(i).id)]=pages.get_Item(i);
+    (a.pageNames||[]).forEach(function(p){if(!byId[p.id])throw bridgeError("PAGE_NOT_FOUND","Unknown page ID: "+p.id);byId[p.id].name=p.name;});
+    var expected=controllerInfo(draft),names=expected.pages.map(function(p){return p.name;});
+    if(new Set(names).size!==names.length)throw bridgeError("INVALID_ARGUMENTS","Resulting page names must be unique");
+    doc.UpdateController(a.controller,draft.Write());
+    var result=controllerInfo(requireController(doc,name));
+    if(JSON.stringify(result.pages)!==JSON.stringify(expected.pages)||result.exported!==expected.exported)throw bridgeError("CONTROLLER_READBACK","Native controller update differs; inspect partial changes");
+    saveControllerDoc(doc);
+    result.history={nativeUndoVerified:false,renameUndoRisk:name!==a.controller};
+    return ok(result);
+};
+COMMANDS.controller_select=function(a) {
+    var doc=controllerDoc(a,"SwitchPage"),c=requireController(doc,a.controller);
+    controllerInfo(c); // Validate bounded state before page switching can run actions.
+    if(a.index>=c.pageCount)throw bridgeError("PAGE_NOT_FOUND","Page index out of range");
+    var before=Number(c.selectedIndex);doc.SwitchPage(a.controller,a.index);
+    var result=controllerInfo(c);
+    if(result.selectedIndex!==a.index)throw bridgeError("CONTROLLER_READBACK","Native page selection differs");
+    saveControllerDoc(doc);result.previousIndex=before;return ok(result);
+};
+COMMANDS.controller_remove=function(a) {
+    var doc=controllerDoc(a,"RemoveController");requireController(doc,a.controller);
+    doc.RemoveController(a.controller);
+    if(doc.content.GetController(a.controller))throw bridgeError("CONTROLLER_READBACK","Controller remains after removal");
+    saveControllerDoc(doc);return ok({removed:a.controller});
+};
 // ---------------- bounded asynchronous publish (upstream PublishHandler adapter) ----------------
 function startPublish(job) {
     if(App.docView.HasUnsavedDocuments())throw bridgeError("UNSAVED_DOCUMENTS","Save documents before publish");
@@ -441,9 +619,9 @@ function stepPublish(job) {
     detachPublish(job);return out;
 }
 var ASYNC_STARTERS={publish:startPublish},ASYNC_STEPPERS={publish:stepPublish};
-var DOCUMENT_COMMANDS=["open_doc","list_children","insert_object","set_property","remove_object"];
+var DOCUMENT_COMMANDS=["controller_list","controller_create","controller_update","controller_select","controller_remove","open_doc","list_children","insert_object","set_property","remove_object"];
 function utf8Length(s) { var n=0;for(var i=0;i<s.length;i++){var c=s.charCodeAt(i);if(c<128)n++;else if(c<2048)n+=2;else if(c>=0xd800&&c<=0xdbff&&i+1<s.length&&s.charCodeAt(i+1)>=0xdc00&&s.charCodeAt(i+1)<=0xdfff){n+=4;i++;}else n+=3;}return n; }
-function stamp(out,job) {out.requestId=job && job.requestId || null;out.sessionId=SESSION;return out;}
+function stamp(out,job) {out.requestId=job && job.requestId || null;out.sessionId=SESSION;if(out.revision===undefined)out.revision=Coordination.revision;return out;}
 function writeResponse(ctx,status,out,job) {
     out=stamp(out,job);
     var body=JSON.stringify(out);
@@ -503,21 +681,22 @@ function pumpAccepts() {
 }
 function validateEnvelope(msg) {
     if(!object(msg))throw bridgeError("INVALID_REQUEST","Object body required");
-    Object.keys(msg).forEach(function(k){if(["cmd","args","requestId","sessionId","deadlineMs"].indexOf(k)<0)throw bridgeError("INVALID_REQUEST","Unexpected envelope key");});
+    Object.keys(msg).forEach(function(k){if(["cmd","args","requestId","sessionId","deadlineMs","expectedRevision"].indexOf(k)<0)throw bridgeError("INVALID_REQUEST","Unexpected envelope key");});
     if(typeof msg.requestId!=="string" || !UUID.test(msg.requestId))throw bridgeError("INVALID_REQUEST","UUID requestId required");
     if(typeof msg.cmd!=="string" || !Object.prototype.hasOwnProperty.call(ARG_KEYS,msg.cmd))throw bridgeError("COMMAND_NOT_ALLOWED","Unknown command");
     if(msg.cmd!=="ping" && msg.sessionId!==SESSION)throw bridgeError("SESSION_MISMATCH","Fresh ping sessionId required; no operation executed");
     if(msg.cmd==="ping" && msg.sessionId!==undefined && msg.sessionId!==SESSION)throw bridgeError("SESSION_MISMATCH","Stale ping sessionId");
     if(!Number.isSafeInteger(msg.deadlineMs)||msg.deadlineMs<=Date.now())throw bridgeError("DEADLINE_EXCEEDED","Request expired; no operation executed");
+    if(mutates(msg.cmd)&&(!Number.isSafeInteger(msg.expectedRevision)||msg.expectedRevision<0))throw bridgeError("REVISION_REQUIRED","Mutations require an observed project revision");
     validateArgs(msg.cmd,msg.args);
     if(msg.cmd!=="ping")assertProject();
 }
 function enqueue(ctx,msg) {
-    var job={ctx:ctx,cmd:msg.cmd,args:msg.args,requestId:msg.requestId,deadline:Math.min(msg.deadlineMs,Date.now()+LIMIT.maxMs),phase:"queued"};
+    var job={ctx:ctx,cmd:msg.cmd,args:msg.args,requestId:msg.requestId,deadline:Math.min(msg.deadlineMs,Date.now()+LIMIT.maxMs),phase:"queued",expectedRevision:msg.expectedRevision};
     validateEnvelope(msg);
     // Dynamic ping is read-only and deliberately uncached: liveness remains available while publish is busy.
     if(job.cmd==="ping"){writeResponse(ctx,200,COMMANDS.ping(job.args),job);return;}
-    var fingerprint=JSON.stringify({cmd:job.cmd,args:job.args}),seen=Bridge.seen[job.requestId];
+    var fingerprint=JSON.stringify({cmd:job.cmd,args:job.args,expectedRevision:job.expectedRevision}),seen=Bridge.seen[job.requestId];
     if(seen){
         if(seen.fingerprint!==fingerprint)writeResponse(ctx,409,fail("requestId reused with different operation","REQUEST_ID_REUSED"),job);
         else if(seen.response)writeResponse(ctx,200,seen.response,job);
@@ -563,6 +742,7 @@ function pumpReaders() {
     }
 }
 function complete(job,out) {
+    if(job.writeClaimed)Coordination.revision++;
     var sent=writeResponse(job.ctx,200,out,job),seen=Bridge.seen[job.requestId];
     seen.done=true;seen.response=sent;Bridge.completed.push(job.requestId);
     if(Bridge.completed.length>LIMIT.cache){var evicted=Bridge.completed.shift();Bridge.seen[evicted].response=null;}
@@ -591,10 +771,11 @@ function stepQueue() {
             if(job.phase==="post-create-wait"){complete(job,job.result);return;}
             execute(job);return;
         }
+        claimWrite(job);
         if(job.cmd==="publish"){job.phase="publish-wait";startPublish(job);return;}
         if(DOCUMENT_COMMANDS.indexOf(job.cmd)>=0){job.opened=ensureDocOpen(getPkg(job.args.pkg),job.args.name);job.phase="document-wait";job.openFrame=Bridge.frame;return;}
         execute(job);
-    }catch(e){if(job.handler)detachPublish(job);plog(e.bridgeCode || "EDITOR_API_ERROR");complete(job,fail(e.bridgeCode?e.message:"Editor API call failed; operation may be partially applied and will not be replayed",e.bridgeCode || "EDITOR_API_ERROR"));}
+    }catch(e){if(job.handler)detachPublish(job);plog(e.bridgeCode || "EDITOR_API_ERROR",e);complete(job,fail(e.bridgeCode?e.message:"Editor API call failed; operation may be partially applied and will not be replayed",e.bridgeCode || "EDITOR_API_ERROR"));}
 }
 function startServer() {
     if(Bridge.listener || !Config)return;

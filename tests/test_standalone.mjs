@@ -9,7 +9,7 @@ const dir=fs.mkdtempSync(path.join(temp,'standalone-')),project=path.join(dir,'p
 const httpServer=http.createServer(async(req,res)=>{
   let raw='';for await(const b of req)raw+=b;const data=JSON.parse(raw);calls.push(data.cmd);
   if(data.cmd==='list_packages')await new Promise(r=>setTimeout(r,200));
-  res.end(JSON.stringify({ok:true,requestId:data.requestId,sessionId:'standalone-session',data:data.cmd==='ping'?{projectPath:project,sessionId:'standalone-session',frame:1,updatedAtMs:Date.now()}:[]}));
+  res.end(JSON.stringify({ok:true,revision:0,requestId:data.requestId,sessionId:'standalone-session',data:data.cmd==='ping'?{projectPath:project,sessionId:'standalone-session',frame:1,updatedAtMs:Date.now()}:[]}));
 });
 await new Promise(r=>httpServer.listen(0,'127.0.0.1',r));
 fs.writeFileSync(path.join(dir,'config.json'),JSON.stringify({projectPath:project,publishDir:path.join(dir,'published'),screenshotDir:path.join(dir,'screenshots'),python:process.execPath,editorPath:process.execPath,host:'127.0.0.1',port:httpServer.address().port,token:'a'.repeat(64)}));
@@ -20,8 +20,8 @@ child.stdout.on('data',b=>{text+=b;let n;while((n=text.indexOf('\n'))>=0){const 
 const rpc=(method,params={})=>{const seq=++id;return {id:seq,promise:new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('RPC timeout')),5000);pending.set(seq,out=>{clearTimeout(timer);resolve(out);});child.stdin.write(JSON.stringify({jsonrpc:'2.0',id:seq,method,params})+'\n');})};};
 let checks=0;const check=fn=>{fn();checks++;};
 try{
-  const init=await rpc('initialize',{protocolVersion:'2025-06-18'}).promise;check(()=>assert.equal(init.result.serverInfo.version,'0.4.0'));
-  const list=await rpc('tools/list').promise;check(()=>assert.equal(list.result.tools.length,18));
+  const init=await rpc('initialize',{protocolVersion:'2025-06-18'}).promise;check(()=>assert.equal(init.result.serverInfo.version,'0.5.0-dev.1'));
+  const list=await rpc('tools/list').promise;check(()=>assert.equal(list.result.tools.length,24));
   check(()=>assert(list.result.tools.every(x=>!x.name.startsWith('source_'))));
   check(()=>assert(list.result.tools.find(x=>x.name==='read_component').annotations.readOnlyHint));
   check(()=>assert(list.result.tools.find(x=>x.name==='delete_item').annotations.destructiveHint));

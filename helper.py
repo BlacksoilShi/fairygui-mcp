@@ -11,11 +11,13 @@ import os
 from pathlib import Path
 import re
 import socket
+import struct
 import subprocess
 import sys
 import time
 import urllib.request
 import uuid
+import zlib
 
 ROOT = Path(__file__).resolve().parent
 MAX_BYTES = 65536
@@ -224,6 +226,51 @@ class Helper:
         finally:
             lock.unlink(missing_ok=True)
 
+    def verify_screenshot(self, args):
+        if set(args) != {'path'} or not isinstance(args['path'], str):
+            raise ValueError('Expected screenshot path')
+        file = within(args['path'], self.cfg['screenshotDir'])
+        if file.suffix.lower() != '.png' or not 57 <= file.stat().st_size <= 64*1024*1024:
+            raise ValueError('PNG path or size invalid')
+        raw = file.read_bytes()
+        if raw[:8] != b'\x89PNG\r\n\x1a\n':
+            raise ValueError('PNG signature')
+        pos, chunks, payload, width, height, bands, finished = 8, 0, [], 0, 0, 0, False
+        while pos < len(raw):
+            if pos+12 > len(raw) or chunks > 10000:
+                raise ValueError('PNG chunk bounds')
+            length = struct.unpack_from('>I', raw, pos)[0]
+            kind = raw[pos+4:pos+8]; end = pos+8+length
+            if end+4 > len(raw):
+                raise ValueError('PNG chunk length')
+            data = raw[pos+8:end]
+            if zlib.crc32(kind+data) & 0xffffffff != struct.unpack_from('>I', raw, end)[0]:
+                raise ValueError('PNG CRC')
+            if chunks == 0:
+                if kind != b'IHDR' or length != 13:
+                    raise ValueError('PNG header')
+                width,height,depth,color,compression,filtering,interlace = struct.unpack('>IIBBBBB', data)
+                if not 0 < width <= 4096 or not 0 < height <= 4096 or depth != 8 or color not in (2,6) or compression or filtering or interlace:
+                    raise ValueError('Unsupported PNG profile')
+                bands = 3 if color == 2 else 4
+            elif kind == b'IHDR':
+                raise ValueError('Duplicate PNG header')
+            if kind == b'IDAT':payload.append(data)
+            if kind == b'IEND':
+                if length or end+4 != len(raw):raise ValueError('PNG end')
+                finished = True
+            pos = end+4; chunks += 1
+        if not finished or not payload:raise ValueError('Incomplete PNG')
+        expected = (width*bands+1)*height
+        inflater = zlib.decompressobj()
+        pixels = inflater.decompress(b''.join(payload),expected+1)
+        if len(pixels) != expected or not inflater.eof or inflater.unused_data or inflater.unconsumed_tail:
+            raise ValueError('PNG pixel stream bounds')
+        if any(pixels[y*(width*bands+1)] > 4 for y in range(height)):
+            raise ValueError('PNG filter code')
+        return {'verified':True,'path':str(file),'width':width,'height':height,'bytes':len(raw),
+                'sha256':hashlib.sha256(raw).hexdigest(),'scope':'PNG chunks/CRC, bounded decompression, dimensions and filter codes; not visual-content interpretation'}
+
     def verify_publish(self, args):
         if set(args) != {'pkg', 'startedAtMs'} or not isinstance(args['pkg'], str) or type(args['startedAtMs']) is not int:
             raise ValueError('Expected package and publication start timestamp')
@@ -280,10 +327,10 @@ def main():
         if not isinstance(args, dict):
             raise ValueError('Arguments must be an object')
         command = sys.argv[1]
-        if command not in {'start', 'install', 'verify_publish'} or (command != 'verify_publish' and args):
+        if command not in {'start', 'install', 'verify_publish', 'verify_screenshot'} or (command not in {'verify_publish','verify_screenshot'} and args):
             raise ValueError('Unknown command or arguments')
         helper = Helper()
-        result = helper.verify_publish(args) if command == 'verify_publish' else getattr(helper, command)()
+        result = getattr(helper, command)(args) if command in {'verify_publish','verify_screenshot'} else getattr(helper, command)()
         output, code = {'ok': True, 'result': result}, 0
     except HelperError as error:
         output, code = {'ok': False, 'error': {'code': error.code, 'message': str(error)}}, 1
