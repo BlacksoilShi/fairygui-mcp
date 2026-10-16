@@ -1,6 +1,6 @@
-# 0.5.0 development: native observability and coordination
+# 0.5.0: native observability, coordination and editing
 
-This is an in-progress branch, not a declaration that the full expansion goal is complete.
+This document describes the verified 0.5.0 feature boundaries; it does not claim a complete editor reconstruction.
 
 ## Bounded pagination
 
@@ -178,12 +178,23 @@ sampling checks start/mid/end interpolation, unchanged sibling, restored design 
 and unchanged XML. Size/Scale/Skew/Rotation endpoint values and all six tracks surviving
 restart are also verified. Complex actions/paths/easing and native Undo remain open work.
 
-## Remaining goal scope
+## Further expansion boundaries
 
 Other versions and untested APIs require actual execution; declarations alone are not compatibility proof.
 Relations cover direct-child parent/sibling groups; nested/inherited behavior remains separate.
 Controller actions/gear editing and deeper page editing remain beyond the initial five tools.
-Complex transition tracks, native exception recovery and broader legacy-tool compatibility
-need further native tests. Matching server/plugin deployment and
-release audit are still required; local development does not imply publication or client reload.
-These are active work, not implied by existing tests.
+Complex transition tracks and native exception recovery still need separate targeted work.
+No automatic rollback or ordinary editor Undo guarantee is made. This release adds the
+initial controller/transition/relation APIs, not every possible editor operation.
+
+## Combined native regression
+
+On both6.1.4 and6.0.5, one component combined controller rename/page-name changes,
+change_page actions, gearXY/gearSize, parent-width relations and XY transition sampling.
+The renamed controller retained its action and gear bindings; page switches still propagated
+through the action to the second controller and its size gear. Sampling restored checked
+geometry and controller selections. Restart retained these behaviors; parent resizing still
+propagated. A native exported container then inserted the component, changed placement,
+saved and published; the independently reopened package matched ID/header/hash checks.
+Object removal and fixture deletion completed the loop. Publish artifact checks are not
+full runtime rendering-equivalence proof.

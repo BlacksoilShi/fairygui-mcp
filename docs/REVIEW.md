@@ -1,3 +1,24 @@
+# 0.5.0 release review
+
+- 34 native tools;38 with the separately configured source adapter.
+- 255 offline checks:3 framing,9 revision ordering,116 transport/schema,
+  12 standalone protocol,90 plugin VM,25 Python helper checks; plus build parity.
+- Windows editor6.1.4 and6.0.5:1,200 resources/13 pages, independent-client
+  optimistic write conflicts, fresh validated screenshots, external refresh/import/delete.
+- Controllers, relations and six numeric transition tracks were exercised through
+  real stdio clients, saved XML, complete editor restarts and native frame sampling.
+- Combined fixtures verify controller actions/gear bindings alongside relations,
+  transitions and original object CRUD/publication. No editor binaries, credentials,
+  extracted code, private project assets or raw runtime logs are distributed here.
+- Known constraints and unimplemented broader editing options are explicit in NEXT.md.
+- UI/source-backend changes are not coordinated native MCP writers; partial native
+  failures are not transactional; ordinary Undo is not guaranteed. Version coverage
+  does not imply every API, OS, engine runtime or output format works.
+
+The following record is historical; its open items are not the current0.5.0 status.
+
+---
+
 # 0.4.0 release review
 
 ## Fixed in this iteration

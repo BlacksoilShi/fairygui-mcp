@@ -4,7 +4,7 @@
 "use strict";
 var CS = require("csharp");
 var FairyGUI = CS.FairyGUI, FairyEditor = CS.FairyEditor, App = FairyEditor.App;
-var VERSION = "0.5.0-dev.3";
+var VERSION = "0.5.0";
 var PluginDir = String(App.pluginManager.basePath) + "/fgui-agent-bridge-custom";
 var Config = null;
 var SESSION = "custom-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);

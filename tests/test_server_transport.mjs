@@ -62,7 +62,7 @@ try{
  const rpc=(method,params)=>new Promise((resolve,reject)=>{const seq=++id;const timer=setTimeout(()=>reject(Error('RPC test timeout')),6000);pending.set(seq,v=>{clearTimeout(timer);resolve(v);});child.stdin.write(JSON.stringify({jsonrpc:'2.0',id:seq,method,params})+'\n');});
  const tool=async(name,args={})=>{const r=await rpc('tools/call',{name,arguments:args});return {raw:r,value:r.result?JSON.parse(r.result.content[0].text):null};};
  const init=await rpc('initialize',{protocolVersion:'2024-11-05',capabilities:{},clientInfo:{name:'transport-mock',version:'1'}});check('protocol negotiation preserves supported version',()=>assert.equal(init.result.protocolVersion,'2024-11-05'));
- check('stage2 server version0.5.0-dev.3',()=>assert.equal(init.result.serverInfo.version,'0.5.0-dev.3'));
+ check('stage2 server version0.5.0',()=>assert.equal(init.result.serverInfo.version,'0.5.0'));
  const latest=await rpc('initialize',{protocolVersion:'future-version'});check('protocol negotiation selects supported fallback',()=>assert.equal(latest.result.protocolVersion,'2025-06-18'));
  const list=await rpc('tools/list',{});check('actual fork exposes38tools',()=>assert.equal(list.result.tools.length,38));
  check('all root schemas closed',()=>assert(list.result.tools.every(t=>t.inputSchema.additionalProperties===false)));
