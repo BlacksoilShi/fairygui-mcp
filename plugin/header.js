@@ -4,7 +4,7 @@
 "use strict";
 var CS = require("csharp");
 var FairyGUI = CS.FairyGUI, FairyEditor = CS.FairyEditor, App = FairyEditor.App;
-var VERSION = "0.5.0";
+var VERSION = "0.6.0";
 var PluginDir = String(App.pluginManager.basePath) + "/fgui-agent-bridge-custom";
 var Config = null;
 var SESSION = "custom-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
@@ -94,7 +94,7 @@ function validateItemUrl(url) {
     var pkg=App.project.GetPackage(url.slice(5,13));if(!pkg)throw bridgeError("OBJECT_NOT_ALLOWED","URL package not in current project");
     requireWithin(pkg.basePath,Config.projectPath);
 }
-var ARG_KEYS={transition_sample:["pkg","name","transition","frame","targetIds"],transition_list:["pkg", "name", "transition", "offset", "limit"],transition_create:["pkg", "name", "transition"],transition_update:["pkg", "name", "transition", "settings"],transition_remove:["pkg", "name", "transition"],transition_keyframe_set:["pkg", "name", "transition", "targetId", "type", "frame", "values", "tween", "label"],transition_keyframe_remove:["pkg", "name", "transition", "targetId", "type", "frame"],relation_list:["pkg","name","objectId","offset","limit"],relation_set:["pkg","name","objectId","targetId","definitions"],relation_remove:["pkg","name","objectId","targetId"],controller_list:["pkg","name","controller","offset","limit"],controller_create:["pkg","name","controller","pages","exported"],controller_update:["pkg","name","controller","newName","pageNames","exported"],controller_select:["pkg","name","controller","index"],controller_remove:["pkg","name","controller"],list_items_page:["pkg","limit","cursor"],ping:[],project_info:[],list_packages:[],list_items:["pkg","depth"],read_component:["pkg","name"],create_component:["pkg","name","width","height","path","exported","extention"],delete_item:["pkg","name"],open_doc:["pkg","name"],close_doc:["pkg","name"],list_children:["pkg","name"],insert_object:["pkg","name","url","ref_pkg","ref_name","x","y","index","props"],set_property:["pkg","name","target","props","prop","value"],remove_object:["pkg","name","target"],save_all:[],refresh:[],screenshot:["path"],bridge_log:["tail"],publish:["pkg","branch","out_path","timeout_ms"]};
+var ARG_KEYS={transition_sample:["pkg","name","transition","frame","targetIds"],transition_list:["pkg", "name", "transition", "offset", "limit"],transition_create:["pkg", "name", "transition"],transition_update:["pkg", "name", "transition", "settings"],transition_remove:["pkg", "name", "transition"],transition_keyframe_set:["pkg", "name", "transition", "targetId", "type", "frame", "values", "tween", "label"],transition_keyframe_remove:["pkg", "name", "transition", "targetId", "type", "frame"],relation_list:["pkg","name","objectId","offset","limit"],relation_set:["pkg","name","objectId","targetId","definitions"],relation_remove:["pkg","name","objectId","targetId"],controller_list:["pkg","name","controller","offset","limit"],controller_create:["pkg","name","controller","pages","exported"],controller_update:["pkg","name","controller","newName","pageNames","exported"],controller_select:["pkg","name","controller","index"],controller_remove:["pkg","name","controller"],list_items_page:["pkg","limit","cursor"],ping:[],project_info:[],list_packages:[],list_items:["pkg","depth"],read_component:["pkg","name"],create_component:["pkg","name","width","height","path","exported","extention"],delete_item:["pkg","name"],open_doc:["pkg","name"],close_doc:["pkg","name"],list_children:["pkg","name"],insert_object:["pkg","name","url","ref_pkg","ref_name","x","y","index","props"],set_property:["pkg","name","target","props","prop","value"],remove_object:["pkg","name","target"],save_all:[],refresh:[],screenshot:["path"],bridge_log:["tail"],publish:["pkg","branch","branchMode","out_path","timeout_ms"]};
 function validateArgs(cmd,a) {
     if(!object(a))throw bridgeError("INVALID_ARGUMENTS","args must be object");
     Object.keys(a).forEach(function(k){if(ARG_KEYS[cmd].indexOf(k)<0)throw bridgeError("INVALID_ARGUMENTS","Unsupported argument key");});
@@ -114,6 +114,11 @@ function validateArgs(cmd,a) {
     if(a.tail!==undefined && (!Number.isInteger(a.tail)||a.tail<1||a.tail>100))throw bridgeError("INVALID_ARGUMENTS","tail1..100 required");
     if(a.timeout_ms!==undefined && (!Number.isInteger(a.timeout_ms)||a.timeout_ms<1000||a.timeout_ms>120000))throw bridgeError("INVALID_ARGUMENTS","timeout_ms1000..120000 required");
     if(a.branch!==undefined && (typeof a.branch!=="string" || a.branch.length>64 || !/^[A-Za-z0-9_-]*$/.test(a.branch)))throw bridgeError("INVALID_ARGUMENTS","Invalid branch");
+    if(cmd==="publish"){
+        if(a.branchMode!==undefined && ["configured","all","selected","trunk"].indexOf(a.branchMode)<0)throw bridgeError("INVALID_ARGUMENTS","branchMode must be configured, all, selected or trunk");
+        if(a.branchMode==="selected" && !a.branch)throw bridgeError("INVALID_ARGUMENTS","selected requires a nonempty branch");
+        if((a.branchMode==="all" || a.branchMode==="trunk") && a.branch)throw bridgeError("INVALID_ARGUMENTS","all and trunk do not accept a selected branch");
+    }
     if(a.extention!==undefined && ["Button","Label","ComboBox","ProgressBar","Slider","ScrollBar","List","Tree"].indexOf(a.extention)<0)throw bridgeError("INVALID_ARGUMENTS","Unsupported extension");
     if(a.path!==undefined && cmd==="create_component" && (typeof a.path!=="string" || a.path.length>256 || /(^[\/\\]|:|\.\.|[\u0000-\u001f])/.test(a.path)))throw bridgeError("PATH_NOT_ALLOWED","Component path must be relative without traversal");
     if(cmd==="create_component" && /[\/\\:.]/.test(a.name))throw bridgeError("INVALID_ARGUMENTS","Component name must be a simple name");

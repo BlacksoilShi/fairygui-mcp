@@ -106,7 +106,7 @@ class Helper:
         self.work = self.config_path.parent
         self.cfg = read_json(self.config_path)
         required = {'projectPath', 'editorPath', 'python', 'host', 'port', 'token', 'publishDir', 'screenshotDir'}
-        optional = {'node', 'sourceProject', 'sourceHelper', 'sourceConfig'}
+        optional = {'node', 'sourceProject', 'sourceHelper', 'sourceConfig', 'sourceProtocol', 'sourceUploads'}
         c = self.cfg
         if not isinstance(c, dict) or not required <= c.keys() or c.keys() - required - optional:
             raise ValueError('Invalid configuration fields')
@@ -114,6 +114,10 @@ class Helper:
             raise ValueError('Invalid loopback port')
         if not isinstance(c['token'], str) or not re.fullmatch(r'[A-Za-z0-9_-]{32,256}', c['token']):
             raise ValueError('Invalid token format')
+        if 'sourceProtocol' in c and (c['sourceProtocol'] != 'fgui-rebuild-http/1' or not c.get('sourceHelper') or not c.get('sourceConfig')):
+            raise ValueError('Explicit matching independent backend required')
+        if 'sourceUploads' in c and (type(c['sourceUploads']) is not bool or c['sourceUploads'] and c.get('sourceProtocol') != 'fgui-rebuild-http/1'):
+            raise ValueError('Explicit matching upload backend required')
         for key in required - {'host', 'port', 'token'}:
             if not isinstance(c[key], str) or not Path(c[key]).is_absolute():
                 raise ValueError('Absolute configured paths required')
@@ -168,6 +172,123 @@ class Helper:
                 with target.open('xb') as stream:
                     stream.write(raw)
         return {'installed': True, 'directory': str(dest), 'files': list(sources), 'editorBinariesModified': False}
+
+    def recover_publish(self):
+        # Share-none handles are released on process exit; lock filenames are
+        # not owner-death evidence and do not need stale-file removal.
+        if os.name != 'nt':
+            raise HelperError('PLATFORM_UNVERIFIED', 'Windows owner proof preparation required')
+        from ctypes import wintypes as W
+        path = self.project/'plugins/fgui-agent-bridge-custom/publish-proof.lock'
+        if path.absolute().resolve() != path.absolute():
+            raise HelperError('PATH_SCOPE', 'Recovery lock path rebound or linked')
+        within(path, self.project)
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.CreateFileW.argtypes = [W.LPCWSTR,W.DWORD,W.DWORD,ctypes.c_void_p,W.DWORD,W.DWORD,W.HANDLE]
+        kernel.CreateFileW.restype = W.HANDLE
+        kernel.CloseHandle.argtypes = [W.HANDLE]
+        kernel.CloseHandle.restype = W.BOOL
+        handle = kernel.CreateFileW(str(path),0xc0000000,0,None,4,128,None)
+        if handle == ctypes.c_void_p(-1).value:
+            raise HelperError('PUBLISH_OWNER_PROOF_BUSY', 'Exclusive recovery coordination handle unavailable')
+        try:
+            return self._recover_publish_locked()
+        finally:
+            kernel.CloseHandle(handle)
+
+    def _recover_publish_locked(self):
+        """Prepare a proof; only the authenticated editor consumes/restores it."""
+        import importlib.util
+        import stat
+        spec = importlib.util.spec_from_file_location('fgui_publish_owner', ROOT/'publish_owner.py')
+        owner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(owner)
+        heartbeat = self.ping()
+        if not heartbeat:
+            raise HelperError('BRIDGE_UNREACHABLE', 'Fresh authenticated editor ping required')
+        recovery = heartbeat.get('publishRecovery')
+        if not isinstance(recovery, dict) or recovery.get('blocked') is not True:
+            return {'prepared': False, 'status': 'not-blocked', 'nativeRestored': False}
+        challenge = heartbeat.get('publishRecoveryChallenge')
+        keys = {'schema', 'sessionId', 'hostPid', 'project', 'leaseSha256'}
+        if (not isinstance(challenge, dict) or set(challenge) != keys
+                or type(challenge['schema']) is not int or challenge['schema'] != 1
+                or challenge['sessionId'] != heartbeat['sessionId']
+                or challenge['project'] != owner.canonical_project(str(self.project))
+                or type(challenge['hostPid']) is not int or not 0 < challenge['hostPid'] < 2**32):
+            raise HelperError('PUBLISH_OWNER_UNAVAILABLE', 'Matching fresh host challenge required')
+        host = current_process(challenge['hostPid'])
+        if (not host or Path(host['path']).resolve() != Path(self.cfg['editorPath']).resolve()):
+            raise HelperError('PUBLISH_HOST_IDENTITY', 'Challenge PID differs from configured editor identity')
+        state = self.work/'state/editor-start.json'
+        if state.exists():
+            saved = read_json(state)
+            if (saved.get('pid') != challenge['hostPid']
+                    or saved.get('processCreationTime') != host['creationTime']
+                    or Path(saved.get('projectPath', '')).resolve() != self.project):
+                raise HelperError('PUBLISH_HOST_IDENTITY', 'Recorded host PID/birth/project differs')
+        directory = self.project/'plugins/fgui-agent-bridge-custom'
+        lease_path = directory/'publish-lease.json'
+        proof_path = directory/'publish-owner-proof.json'
+        def guarded(path):
+            absolute = path.absolute()
+            if absolute.resolve() != absolute or not absolute.is_relative_to(self.project):
+                raise HelperError('PATH_SCOPE', 'Recovery path rebound or linked')
+            for item in (absolute, *absolute.parents):
+                try:
+                    value = item.lstat()
+                except FileNotFoundError:
+                    continue
+                if stat.S_ISLNK(value.st_mode) or getattr(value, 'st_file_attributes', 0) & 1024:
+                    raise HelperError('PATH_SCOPE', 'Linked recovery ancestor rejected')
+            return absolute
+        guarded(lease_path); guarded(proof_path)
+        def lease_text():
+            with lease_path.open('rb') as stream:
+                raw = stream.read(4100)
+            if len(raw) > 4099:
+                raise HelperError('PUBLISH_LEASE_INVALID', 'Bounded lease required')
+            value = raw.decode('utf-8-sig')
+            owner.parse_lease(value, str(self.project))
+            return value
+        raw = lease_text()
+        if hashlib.sha256(raw.encode('utf-8')).hexdigest() != challenge['leaseSha256']:
+            raise HelperError('PUBLISH_LEASE_CHANGED', 'Lease differs from authenticated challenge')
+        now = time.time_ns()//1000000
+        if proof_path.exists():
+            with proof_path.open('rb') as stream:
+                old = stream.read(8193)
+            if len(old) > 8192:
+                raise HelperError('PUBLISH_OWNER_PROOF_INVALID', 'Preserve oversized existing proof')
+            envelope = decode(old.decode('utf-8-sig'))
+            payload = decode(envelope['payload'])
+            # Authenticate a stale same-lease proof before replacing it. Never
+            # overwrite malformed, foreign-lease or still-fresh concurrent proof.
+            owner.verify_owner_proof(envelope, raw, str(self.project), payload['hostSession'],
+                                     payload['hostPid'], self.cfg['token'], now_ms=payload['issuedAtMs'])
+            if now < payload['expiresAtMs']:
+                raise HelperError('PUBLISH_OWNER_PROOF_BUSY', 'A fresh proof is already pending consumption')
+        proof = owner.make_owner_proof(raw, str(self.project), challenge['sessionId'],
+                                      challenge['hostPid'], self.cfg['token'], now_ms=now)
+        checked = owner.verify_owner_proof(proof, raw, str(self.project), challenge['sessionId'],
+                                          challenge['hostPid'], self.cfg['token'], now_ms=now)
+        guarded(lease_path); guarded(proof_path)
+        if lease_text() != raw:
+            raise HelperError('PUBLISH_LEASE_CHANGED', 'Lease changed during external observation')
+        temp = directory/('.owner-proof-'+uuid.uuid4().hex+'.tmp')
+        try:
+            with temp.open('xb') as stream:
+                stream.write(owner.canonical_json(proof).encode('utf-8'))
+                stream.flush(); os.fsync(stream.fileno())
+            guarded(proof_path)
+            if lease_text() != raw:
+                raise HelperError('PUBLISH_LEASE_CHANGED', 'Lease changed before atomic proof publication')
+            os.replace(temp, proof_path)
+        finally:
+            temp.unlink(missing_ok=True)
+        return {'prepared': True, 'ownerState': checked['owner']['state'],
+                'recoveryPermitted': checked['recoveryPermitted'], 'nativeRestored': False,
+                'expiresAtMs': checked['expiresAtMs']}
 
     def start(self):
         if os.name != 'nt':
@@ -327,7 +448,7 @@ def main():
         if not isinstance(args, dict):
             raise ValueError('Arguments must be an object')
         command = sys.argv[1]
-        if command not in {'start', 'install', 'verify_publish', 'verify_screenshot'} or (command not in {'verify_publish','verify_screenshot'} and args):
+        if command not in {'start', 'install', 'recover_publish', 'verify_publish', 'verify_screenshot'} or (command not in {'verify_publish','verify_screenshot'} and args):
             raise ValueError('Unknown command or arguments')
         helper = Helper()
         result = getattr(helper, command)(args) if command in {'verify_publish','verify_screenshot'} else getattr(helper, command)()

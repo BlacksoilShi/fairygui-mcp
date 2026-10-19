@@ -1,3 +1,8 @@
+# Current scope
+
+The native0.5.0 boundaries below remain, extended by [RELEASE_060.md](RELEASE_060.md).
+Generic source and interrupted recovery are separate layers/gates.
+
 # 0.5.0: native observability, coordination and editing
 
 This document describes the verified 0.5.0 feature boundaries; it does not claim a complete editor reconstruction.

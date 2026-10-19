@@ -176,13 +176,13 @@ TOOLS.create_component.inputSchema=closed({...pkgName,width:integer(1,16384),hei
 TOOLS.insert_object.inputSchema=closed({...pkgName,url:{type:'string',minLength:14,maxLength:256,pattern:'^ui://[A-Za-z0-9]+$'},ref_pkg:str(),ref_name:str(),x:{type:'number',minimum:-1000000,maximum:1000000},y:{type:'number',minimum:-1000000,maximum:1000000},index:integer(0,32767),props},['pkg','name']);
 TOOLS.set_property.inputSchema=closed({...pkgName,target:str(256),props},['pkg','name','props']);
 TOOLS.remove_object.inputSchema=closed({...pkgName,target:str(256)},['pkg','name','target']);
-TOOLS.publish.inputSchema=closed({pkg:str(),branch:{type:'string',maxLength:64,pattern:'^[A-Za-z0-9_-]*$'},out_path:{type:'string',const:config.publishDir},timeout_ms:integer(1000,120000)},['pkg']);
-TOOLS.publish.description='Publish via original editor API; require native success and reopen/hash fresh package output. Artifact verification, not full semantic decoding or byte-equality proof.';
+TOOLS.publish.inputSchema=closed({pkg:str(),branch:{type:'string',maxLength:64,pattern:'^[A-Za-z0-9_-]*$'},branchMode:{type:'string',enum:['configured','all','selected','trunk']},out_path:{type:'string',const:config.publishDir},timeout_ms:integer(1000,120000)},['pkg']);
+TOOLS.publish.description='Publish through original editor. branchMode: configured (default), all, selected with branch, or trunk without branch (base resources only). A branch under configured all-mode is rejected rather than ignored. Timeout is not cancellation: native work drains before another queued command. Reopen/hash fresh output, not full semantic proof.';
 TOOLS.screenshot.inputSchema=closed({path:str(1024)},['path']);
 TOOLS.screenshot.description='Capture the editor root UI through its native display API, save PNG and validate the file; excludes desktop and window chrome.';
 TOOLS.bridge_log.inputSchema=closed({tail:integer(1,100)});
 TOOLS.discover_projects.description='Ping only the one explicitly configured project. Never reads a global registry or selects another editor.';
-TOOLS.editor_start={description:'Start or attach only the configured normal-GUI original editor through the local helper; no headless/license bypass.',inputSchema:closed()};
+TOOLS.editor_start={description:'Start/attach configured normal-GUI editor. Optional recoverPublish=true prepares authenticated external owner proof and confirms native interrupted-publish recovery; live/unknown owners remain blocked.',inputSchema:closed({recoverPublish:{type:'boolean'}})};
 TOOLS.source_inspect={description:'Inspect the configured independent source-model project, not the live original editor.',inputSchema:closed()};
 TOOLS.source_text_set={description:'Modify fixed source Gesture/Main/n1 via independent model, optional same-call undo/redo then save. Separate from original-editor native operations.',inputSchema:closed({text,expectedText:text,history:{type:'array',items:{type:'string',enum:['undo','redo']},maxItems:32}},['text'])};
 TOOLS.source_publish={description:'Run the reconstructed graph/text subset publisher on configured source project. Not the original native editor publisher.',inputSchema:closed()};
@@ -217,11 +217,46 @@ TOOLS.relation_list={description:'Read bounded relations and geometry of a direc
 TOOLS.relation_set={description:'Replace all relation definitions for one parent/sibling target only, using editor enums. targetId=$parent or direct child ID. Native layout write/save; no Undo guarantee.',inputSchema:closed({...pkgName,objectId:str(),targetId:str(),definitions:{type:'array',minItems:1,maxItems:25,items:closed({type:{type:'string',enum:relationTypes},percent:boolean},['type'])}},['pkg','name','objectId','targetId','definitions'])};
 TOOLS.relation_remove={description:'Remove one parent/sibling relation target group and save. Does not remove other targets or restore past geometry.',inputSchema:closed({...pkgName,objectId:str(),targetId:str()},['pkg','name','objectId','targetId'])};
 if(!config.sourceHelper)for(const name of Object.keys(TOOLS))if(name.startsWith('source_'))delete TOOLS[name];
-const readOnly=new Set(['discover_projects','ping','project_info','list_packages','list_items','list_items_page','read_component','bridge_log','source_inspect']);
+const genericSourceNames=['source_capabilities','source_state','source_command','source_receipt_read','source_sound_upload'];
+if(config.sourceProtocol==='fgui-rebuild-http/1'){
+  for(const name of Object.keys(TOOLS))if(name.startsWith('source_'))delete TOOLS[name];
+  const nullableSelector={anyOf:[{type:'null'},str(256)]};
+  const requestId={type:'string',minLength:32,maxLength:32,pattern:'^[a-f0-9]{32}$'};
+  TOOLS.source_capabilities={description:'Read actual capabilities and limits of the explicitly configured independent reconstructed editor. Separate from original/native editor tools.',inputSchema:closed()};
+  TOOLS.source_state={description:'Read arbitrary configured reconstructed package/component state with session/revision. Large states automatically return an immutable snapshot pointer; snapshot=true forces one. Continue with snapshotId/offset/limit; limit1..65536 Unicode characters (default65536), automatically reduced to fit60KiB helper JSON. Follow actual nextOffset, verify UTF8 SHA256, and respect expiresAtMs (local120s; upstream600s). Above8MiB HTTP state automatically uses bounded upstream snapshot pages (32MiB UTF8 cache). Inspect payloadFormat: upstream pages contain the HTTP state envelope without adapter wrapper. Snapshots are not current state. No native-editor execution.',inputSchema:{type:'object',anyOf:[closed({package:nullableSelector,component:nullableSelector,snapshot:boolean}),closed({snapshotId:requestId,offset:integer(0,Number.MAX_SAFE_INTEGER),limit:integer(1,65536)},['snapshotId'])]}};
+  TOOLS.source_command={description:'Execute an advertised operation in the persistent reconstructed editor using explicit session/revision and requestId. Operation-specific args are validated by that backend. No automatic retry. Receipts prevent duplicate dispatch; partial/unknown outcomes require inspection. Large receipts are durable and paged.',inputSchema:closed({requestId,session:{type:'string',minLength:16,maxLength:128,pattern:'^[A-Za-z0-9_-]+$'},expectedRevision:integer(0,Number.MAX_SAFE_INTEGER),package:nullableSelector,component:nullableSelector,operation:{type:'string',minLength:1,maxLength:64,pattern:'^[a-z][a-z0-9_]*$'},args:{type:'object',properties:{},additionalProperties:true}},['requestId','session','expectedRevision','package','component','operation','args'])};
+  TOOLS.source_receipt_read={description:'Read a durable command receipt as byte-budgeted Unicode fragments by requestId; limit1..65536 characters, default65536, actual page may be smaller to fit60KiB. Follow nextOffset and verify full UTF8 SHA256; no command is replayed. Separate reconstructed layer.',inputSchema:closed({requestId,offset:integer(0,Number.MAX_SAFE_INTEGER),limit:integer(1,65536)},['requestId'])};
+  if(config.sourceUploads===true)TOOLS.source_sound_upload={description:'Upload one local WAV/MP3/OGG source file only beneath explicitly configured backend uploadRoots. Requires opt-in sourceUploads=true. Streams up to64MiB without putting binary bytes in MCP JSON. Caller-generated requestId binds one intent; durable receipts prevent duplicate upload, including after helper restart. Completed replay returns historical metadata, not a new lease. Upload is session-owned and single-use; use returned uploadId in a separately revision-checked source_command sound_import/sound_replace. Raw-byte capture does not verify a decoder. No automatic retry or original-editor execution.',inputSchema:closed({requestId,session:{type:'string',minLength:16,maxLength:128,pattern:'^[A-Za-z0-9_-]+$'},expectedRevision:integer(0,Number.MAX_SAFE_INTEGER),filePath:str(2048)},['requestId','session','expectedRevision','filePath'])};
+}
+const readOnly=new Set(['discover_projects','ping','project_info','list_packages','list_items','list_items_page','read_component','bridge_log','source_inspect','source_capabilities','source_state','source_receipt_read']);
 for(const [name,tool] of Object.entries(TOOLS))tool.annotations={readOnlyHint:readOnly.has(name),destructiveHint:!readOnly.has(name),idempotentHint:readOnly.has(name)&&name!=='list_items_page',openWorldHint:false};
-function sanitize(value){if(typeof value==='string')return value.replaceAll(config.token,'[redacted]');if(Array.isArray(value))return value.map(sanitize);if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,/token|authorization/i.test(k)?'[redacted]':sanitize(v)]));return value;}
+function sanitize(value,planResult=false){
+  if(typeof value==='string')return value.replaceAll(config.token,'[redacted]');
+  if(Array.isArray(value))return value.map(item=>sanitize(item));
+  if(value&&typeof value==='object'){
+    const sourcePlan=value.contract==='fgui-rebuild-http/1'&&value.layer==='independent-source-http'&&value.nativeEditorExecuted===false&&value.ok===true&&Number.isSafeInteger(value.revision)&&value.revision>=0&&typeof value.session==='string'&&value.result&&typeof value.result==='object'&&!Array.isArray(value.result)&&typeof value.result.planToken==='string'&&/^[A-Za-z0-9_-]{32}$/.test(value.result.planToken)&&Number.isFinite(value.result.expiresInSeconds)&&value.result.expiresInSeconds>0&&value.result.expiresInSeconds<=120&&value.result.migration&&typeof value.result.migration==='object'&&typeof value.result.migration.planId==='string'&&/^[a-f0-9]{32}$/.test(value.result.migration.planId);
+    return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,/token|authorization/i.test(k)&&!(planResult&&k==='planToken'&&typeof v==='string'&&/^[A-Za-z0-9_-]{32}$/.test(v))?'[redacted]':sanitize(v,!!sourcePlan&&k==='result')]));
+  }
+  return value;
+}
 async function callBridge(cmd,args){
-  if(cmd==='editor_start'){const data=await bridge.helper('start',{},45000);bridge.sessionId=null;return {ok:true,data};}
+  if(config.sourceProtocol==='fgui-rebuild-http/1'&&genericSourceNames.includes(cmd)){
+    const data=await bridge.helper(cmd,args,250000);
+    if(data.ok!==true||data.result?.receiptOnly&&data.result.operationOk===false)throw new BridgeError(data.error?.code||'SOURCE_OPERATION_FAILED',data.error?.message||'Independent operation failed; inspect its receipt',{sourceBackend:data});
+    return {ok:true,data};
+  }
+  if(cmd==='editor_start'){
+    const data=await bridge.helper('start',{},45000);bridge.sessionId=null;bridge.revision=null;
+    if(args.recoverPublish===true){
+      const prepared=await bridge.helper('recover_publish',{},15000);
+      let observed=await bridge.ping();const deadline=Date.now()+6000;
+      while(prepared.prepared&&prepared.recoveryPermitted&&observed.data.publishRecovery?.blocked&&Date.now()<deadline){await new Promise(r=>setTimeout(r,200));observed=await bridge.ping();}
+      const state=observed.data.publishRecovery;
+      if(state?.blocked)throw new BridgeError('PUBLISH_RECOVERY_PENDING','Native recovery remains blocked; inspect fresh ping without replaying a publish',{recovery:state,prepared});
+      data.recovery={prepared,confirmed:true,state};data.ping=observed.data;
+    }
+    return {ok:true,data};
+  }
   if(cmd==='source_property_set')return {ok:true,data:await bridge.helper(cmd,{...args,objectId:args.objectId??'n1'},30000)};
   if(['source_inspect','source_text_set','source_publish'].includes(cmd))return {ok:true,data:await bridge.helper(cmd,args,30000)};
   if(cmd==='discover_projects'){const ping=await bridge.ping();return {ok:true,data:{configuredOnly:true,instances:[{projectPath:config.projectPath,port:config.port,...ping.data}]}};}
@@ -273,7 +308,7 @@ async function handle(req){
       const offered=req.params?.protocolVersion;
       if(typeof offered!=='string')return failure(req.id,-32602,'protocolVersion required');
       const versions=['2025-06-18','2025-03-26','2024-11-05'];
-      send({jsonrpc:'2.0',id:req.id,result:{protocolVersion:versions.includes(offered)?offered:versions[0],capabilities:{tools:{}},serverInfo:{name:'fgui-local-agent-bridge',version:'0.5.0'},instructions:'Single explicitly configured project. Native editor tools and independent source_* tools are separate execution layers.'}});
+      send({jsonrpc:'2.0',id:req.id,result:{protocolVersion:versions.includes(offered)?offered:versions[0],capabilities:{tools:{}},serverInfo:{name:'fgui-local-agent-bridge',version:'0.6.0'},instructions:'Single explicitly configured project. Native editor tools and independent source_* tools are separate execution layers.'}});
     }else if(req.method==='tools/list')send({jsonrpc:'2.0',id:req.id,result:{tools:Object.entries(TOOLS).map(([name,t])=>({name,...t}))}});
     else if(req.method==='tools/call')await toolCall(req);
     else if(req.method==='ping')send({jsonrpc:'2.0',id:req.id,result:{}});

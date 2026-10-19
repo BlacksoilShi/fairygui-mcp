@@ -1,3 +1,10 @@
+# 0.6.0 candidate review
+
+Current changes and verification boundaries: [RELEASE_060.md](RELEASE_060.md).
+The historical records below are retained, not relabeled as fresh release tests.
+
+---
+
 # 0.5.0 release review
 
 - 34 native tools;38 with the separately configured source adapter.

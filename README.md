@@ -1,7 +1,5 @@
-> 0.5.0：原版编辑器 MCP 能力扩展。服务端和工程插件必须成对更新。
-> 已新增：原生 UI 截图与 PNG 验证、资源分页、跨客户端 revision 写冲突检查，以及控制器、关联布局、动效编辑和指定帧采样接口。
-> 当前34个原版工具；启用外部重建后端共38个。
-> v0.4.0 为历史基线；协议、原生验证范围与限制见 docs/NEXT.md。
+> 0.6.0 候选：通用独立后端、显式声音上传、分支发布及经双版本验证的中断恢复。
+> 服务端、helper、工程插件需成对更新。本候选未自动升级本机部署；范围与验证见 [0.6.0](docs/RELEASE_060.md)。
 
 # FairyGUI MCP
 
@@ -25,7 +23,7 @@ Optional source_* tools → explicitly configured external Python backend
 ```
 
 - 本版本默认 **34 个工具**：读取工程/组件、创建组件、插入/删除对象、改属性、保存、发布、日志、启动等。
-- 配置独立重建后端后增加 4 个 `source_*` 工具，共 **38 个**。重建后端不在本仓库中，不是默认运行依赖。
+- 配置独立重建后端后增加 4 个 `source_*` 工具，共 **38 个**；通用模式另行显式启用声音上传后为 **39 个**。重建后端不在本仓库中，不是默认运行依赖。
 - 原生编辑和离线重建是两套执行层，工具说明中明确区分。
 - 已在 **Windows / FairyGUI Editor 6.1.4、6.0.5** 验证部分原生功能；逐项范围见 docs/NEXT.md，不是全部 API 的兼容性保证。
 - `refresh` 已验证外部资源导入；导入异步完成，应轮询读取。`screenshot` 已验证原生 UI 内容截图与独立 PNG 文件检查。
@@ -75,7 +73,7 @@ setup 生成随机令牌，不输出令牌、不覆盖已有配置、不修改�
 ```
 
 配置中的 `python` 默认使用执行 setup 的解释器绝对路径。客户端找不到 Node 时，`command` 也使用绝对路径。
-工具调用超时建议至少 **150 秒**；原生发布最多 120 秒，另留产物核验时间。
+原生工具调用超时建议至少 **150 秒**；原生发布最多 120 秒，另留产物核验时间。通用后端设为最大 HTTP 超时时，客户端应至少留 **260 秒**；详见后端协议。
 
 ### 第一次使用
 
@@ -105,16 +103,44 @@ setup 生成随机令牌，不输出令牌、不覆盖已有配置、不修改�
 当前兼容适配约定为固定 `Gesture/Main`，属性对象 `n0/n1`，同次调用内 undo/redo；
 并非任意工程通用重建器。调用该后端就是执行本地 Python 代码，仅配置可信文件。
 
+
+### 通用重建后端（显式选择）
+上面的配置保留旧版固定 Gesture/Main 适配。需要任意工程/组件选择时，在同一私有配置中另加
+`"sourceProtocol": "fgui-rebuild-http/1"`。此时四个固定工具被四个通用工具替换，
+不是叠加：`source_capabilities`、`source_state`、`source_command`、
+`source_receipt_read`，仍为 38 个工具。后端需单独安装并已启动；本仓库只分发客户端。
+
+再显式设置 `"sourceUploads": true` 且后端配置导入根目录，才增加
+`source_sound_upload`（共 39 个）。上传不是原版编辑器导入，也不是音频解码验证。
+大结果通过有界快照或持久回执分页，调用方需按实际 nextOffset 拼接并核对 SHA256。
+迁移预览的短期 planToken 可通过 MCP 传回；它不是身份认证令牌，过期或历史回执不续期。
+
+配置、尺寸限制、去重/未知结果语义见 [通用后端协议](docs/SOURCE_BACKEND.md)、
+[上传约定](docs/SOUND_UPLOAD.md) 与 [迁移租约](docs/MIGRATION_PLAN_LEASES.md)。
+原生 session/revision 与独立后端 session/revision 分开，交叉使用无效。
+
+## 原生发布与中断恢复
+`publish` 支持 configured/all/selected/trunk 模式。selected 要求非空 branch；all/trunk 不接受 branch。
+configured 仅在当前配置采用单分支处理时接受 branch，全分支配置会明确报错而非忽略参数。
+只处理当前配置工程；source_* 与原生发布是两套执行层。详见 [发布范围](docs/RELEASE_060.md)。
+
+仅在明确处理此前中断的原生发布时调用 `editor_start({"recoverPublish":true})`。
+普通启动行为不变。外部 Windows helper 核验旧进程身份并签发短期证明，原生插件完成
+设置落盘回读和匹配记录清理后才报告恢复。存活/身份不明、磁盘冲突或清理失败仍保持阻塞。
+不要手工删租约或按锁文件年龄猜测进程已退出。见 [恢复协议](docs/PUBLISH_OWNER_PROOF.md)。
+
 ## 测试
 
 ```powershell
 cd D:/FGUI-work/fairygui-mcp
 npm test
 python tests/test_helper.py
+python tests/test_publish_owner.py
+python tests/test_recovery_helper.py
 ```
 
 测试创建本地临时文件与 loopback mock 服务，不启动原版编辑器、不需要 GitHub 凭据。
-Windows CI 执行相同测试。插件主文件由七个源码片段拼接生成：
+Windows CI 执行相同测试。插件主文件由九个源码片段拼接生成：
 
 ```powershell
 npm run build:plugin
@@ -129,7 +155,7 @@ npm run build:plugin
 - loopback、Bearer、Host/Origin 检查、session/request ID 和截止时间。
 - 输入在换行前即有 64 KiB 内存上限；HTTP 响应、编辑队列和并发请求同样有界。
 - 尚未调度的请求可取消；已经发送给编辑器的操作可能已产生作用，超时/断连不等于撤销。
-- 写操作不自动重试。请求去重保存在内存中，不是跨进程持久事务。
+- 原生写操作不自动重试；原生去重在内存中，不是持久事务。通用后端另有持久回执与未知结果规则。
 - 不暴露任意执行脚本、任意 HTTP 目标或全局工程自动发现。
 - 私有配置中含令牌；工程插件内也有相应配置。工程对外发布时同样需要排除它。
 - 路径约束不是同用户恶意代码的系统沙箱，也不消除文件系统竞态。

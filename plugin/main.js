@@ -4,7 +4,7 @@
 "use strict";
 var CS = require("csharp");
 var FairyGUI = CS.FairyGUI, FairyEditor = CS.FairyEditor, App = FairyEditor.App;
-var VERSION = "0.5.0";
+var VERSION = "0.6.0";
 var PluginDir = String(App.pluginManager.basePath) + "/fgui-agent-bridge-custom";
 var Config = null;
 var SESSION = "custom-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
@@ -94,7 +94,7 @@ function validateItemUrl(url) {
     var pkg=App.project.GetPackage(url.slice(5,13));if(!pkg)throw bridgeError("OBJECT_NOT_ALLOWED","URL package not in current project");
     requireWithin(pkg.basePath,Config.projectPath);
 }
-var ARG_KEYS={transition_sample:["pkg","name","transition","frame","targetIds"],transition_list:["pkg", "name", "transition", "offset", "limit"],transition_create:["pkg", "name", "transition"],transition_update:["pkg", "name", "transition", "settings"],transition_remove:["pkg", "name", "transition"],transition_keyframe_set:["pkg", "name", "transition", "targetId", "type", "frame", "values", "tween", "label"],transition_keyframe_remove:["pkg", "name", "transition", "targetId", "type", "frame"],relation_list:["pkg","name","objectId","offset","limit"],relation_set:["pkg","name","objectId","targetId","definitions"],relation_remove:["pkg","name","objectId","targetId"],controller_list:["pkg","name","controller","offset","limit"],controller_create:["pkg","name","controller","pages","exported"],controller_update:["pkg","name","controller","newName","pageNames","exported"],controller_select:["pkg","name","controller","index"],controller_remove:["pkg","name","controller"],list_items_page:["pkg","limit","cursor"],ping:[],project_info:[],list_packages:[],list_items:["pkg","depth"],read_component:["pkg","name"],create_component:["pkg","name","width","height","path","exported","extention"],delete_item:["pkg","name"],open_doc:["pkg","name"],close_doc:["pkg","name"],list_children:["pkg","name"],insert_object:["pkg","name","url","ref_pkg","ref_name","x","y","index","props"],set_property:["pkg","name","target","props","prop","value"],remove_object:["pkg","name","target"],save_all:[],refresh:[],screenshot:["path"],bridge_log:["tail"],publish:["pkg","branch","out_path","timeout_ms"]};
+var ARG_KEYS={transition_sample:["pkg","name","transition","frame","targetIds"],transition_list:["pkg", "name", "transition", "offset", "limit"],transition_create:["pkg", "name", "transition"],transition_update:["pkg", "name", "transition", "settings"],transition_remove:["pkg", "name", "transition"],transition_keyframe_set:["pkg", "name", "transition", "targetId", "type", "frame", "values", "tween", "label"],transition_keyframe_remove:["pkg", "name", "transition", "targetId", "type", "frame"],relation_list:["pkg","name","objectId","offset","limit"],relation_set:["pkg","name","objectId","targetId","definitions"],relation_remove:["pkg","name","objectId","targetId"],controller_list:["pkg","name","controller","offset","limit"],controller_create:["pkg","name","controller","pages","exported"],controller_update:["pkg","name","controller","newName","pageNames","exported"],controller_select:["pkg","name","controller","index"],controller_remove:["pkg","name","controller"],list_items_page:["pkg","limit","cursor"],ping:[],project_info:[],list_packages:[],list_items:["pkg","depth"],read_component:["pkg","name"],create_component:["pkg","name","width","height","path","exported","extention"],delete_item:["pkg","name"],open_doc:["pkg","name"],close_doc:["pkg","name"],list_children:["pkg","name"],insert_object:["pkg","name","url","ref_pkg","ref_name","x","y","index","props"],set_property:["pkg","name","target","props","prop","value"],remove_object:["pkg","name","target"],save_all:[],refresh:[],screenshot:["path"],bridge_log:["tail"],publish:["pkg","branch","branchMode","out_path","timeout_ms"]};
 function validateArgs(cmd,a) {
     if(!object(a))throw bridgeError("INVALID_ARGUMENTS","args must be object");
     Object.keys(a).forEach(function(k){if(ARG_KEYS[cmd].indexOf(k)<0)throw bridgeError("INVALID_ARGUMENTS","Unsupported argument key");});
@@ -114,6 +114,11 @@ function validateArgs(cmd,a) {
     if(a.tail!==undefined && (!Number.isInteger(a.tail)||a.tail<1||a.tail>100))throw bridgeError("INVALID_ARGUMENTS","tail1..100 required");
     if(a.timeout_ms!==undefined && (!Number.isInteger(a.timeout_ms)||a.timeout_ms<1000||a.timeout_ms>120000))throw bridgeError("INVALID_ARGUMENTS","timeout_ms1000..120000 required");
     if(a.branch!==undefined && (typeof a.branch!=="string" || a.branch.length>64 || !/^[A-Za-z0-9_-]*$/.test(a.branch)))throw bridgeError("INVALID_ARGUMENTS","Invalid branch");
+    if(cmd==="publish"){
+        if(a.branchMode!==undefined && ["configured","all","selected","trunk"].indexOf(a.branchMode)<0)throw bridgeError("INVALID_ARGUMENTS","branchMode must be configured, all, selected or trunk");
+        if(a.branchMode==="selected" && !a.branch)throw bridgeError("INVALID_ARGUMENTS","selected requires a nonempty branch");
+        if((a.branchMode==="all" || a.branchMode==="trunk") && a.branch)throw bridgeError("INVALID_ARGUMENTS","all and trunk do not accept a selected branch");
+    }
     if(a.extention!==undefined && ["Button","Label","ComboBox","ProgressBar","Slider","ScrollBar","List","Tree"].indexOf(a.extention)<0)throw bridgeError("INVALID_ARGUMENTS","Unsupported extension");
     if(a.path!==undefined && cmd==="create_component" && (typeof a.path!=="string" || a.path.length>256 || /(^[\/\\]|:|\.\.|[\u0000-\u001f])/.test(a.path)))throw bridgeError("PATH_NOT_ALLOWED","Component path must be relative without traversal");
     if(cmd==="create_component" && /[\/\\:.]/.test(a.name))throw bridgeError("INVALID_ARGUMENTS","Component name must be a simple name");
@@ -206,6 +211,10 @@ COMMANDS.ping = function (a) {
         version: VERSION,revision:Coordination.revision,coordination:"optimistic-revision-v1",
         frame: Bridge.frame, updatedAtMs: Bridge.updatedAtMs, sessionId: SESSION,
         ready: projectAllowed(), busy: Bridge.current != null,
+        activeOperation: Bridge.current?{command:Bridge.current.cmd,phase:Bridge.current.phase,responseSent:!!Bridge.current.responded,nativeTaskCompleted:Bridge.current.handler?publishFinished(Bridge.current):null}:null,
+        lastPublishCleanup: Bridge.lastPublishCleanup || null,
+        publishRecovery: Bridge.publishRecovery || null,
+        publishRecoveryChallenge: publishRecoveryChallenge(),
         backgroundPolicy: backgroundPolicy(),
         editor: "FairyGUI",
         port: Bridge.port,
@@ -857,10 +866,222 @@ COMMANDS.transition_remove=function(a) {
     if(doc.content.transitions.GetItem(a.transition))throw bridgeError("TRANSITION_READBACK","Transition remains after removal");
     saveControllerDoc(doc);return ok({removed:a.transition,history:{nativeUndoVerified:false}});
 };
+// Bounded pure-JS SHA256/HMAC: no IL2CPP crypto/process-query bindings.
+function proofBytes(text){
+    var out=[];
+    for(var i=0;i<text.length;i++){
+        var c=text.charCodeAt(i);
+        if(c>=0xd800&&c<=0xdbff){
+            var d=text.charCodeAt(++i);if(!(d>=0xdc00&&d<=0xdfff))throw bridgeError("PUBLISH_OWNER_PROOF_INVALID","Invalid UTF8 scalar");
+            c=0x10000+((c-0xd800)<<10)+(d-0xdc00);
+        }else if(c>=0xdc00&&c<=0xdfff)throw bridgeError("PUBLISH_OWNER_PROOF_INVALID","Invalid UTF8 scalar");
+        if(c<128)out.push(c);else if(c<2048)out.push(192|(c>>6),128|(c&63));
+        else if(c<65536)out.push(224|(c>>12),128|((c>>6)&63),128|(c&63));
+        else out.push(240|(c>>18),128|((c>>12)&63),128|((c>>6)&63),128|(c&63));
+    }
+    if(out.length>8192)throw bridgeError("PUBLISH_OWNER_PROOF_INVALID","Proof hashing bound exceeded");
+    return out;
+}
+function proofShaBytes(input){
+    var K=[0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+    var h=[0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19],a=input.slice(),bits=a.length*8;
+    if(a.length>8320)throw bridgeError("PUBLISH_OWNER_PROOF_INVALID","Bounded SHA input required");
+    a.push(128);while(a.length%64!==56)a.push(0);
+    a.push(0,0,0,0,(bits>>>24)&255,(bits>>>16)&255,(bits>>>8)&255,bits&255);
+    function r(x,n){return (x>>>n)|(x<<(32-n));}
+    for(var p=0;p<a.length;p+=64){
+        var w=[];for(var j=0;j<16;j++)w[j]=(a[p+j*4]<<24)|(a[p+j*4+1]<<16)|(a[p+j*4+2]<<8)|a[p+j*4+3];
+        for(j=16;j<64;j++){var x=w[j-15],y=w[j-2];w[j]=(w[j-16]+(r(x,7)^r(x,18)^(x>>>3))+w[j-7]+(r(y,17)^r(y,19)^(y>>>10)))|0;}
+        var A=h[0],B=h[1],C=h[2],D=h[3],E=h[4],F=h[5],G=h[6],H=h[7];
+        for(j=0;j<64;j++){var t1=(H+(r(E,6)^r(E,11)^r(E,25))+((E&F)^((~E)&G))+K[j]+w[j])|0,t2=((r(A,2)^r(A,13)^r(A,22))+((A&B)^(A&C)^(B&C)))|0;H=G;G=F;F=E;E=(D+t1)|0;D=C;C=B;B=A;A=(t1+t2)|0;}
+        h=[(h[0]+A)|0,(h[1]+B)|0,(h[2]+C)|0,(h[3]+D)|0,(h[4]+E)|0,(h[5]+F)|0,(h[6]+G)|0,(h[7]+H)|0];
+    }
+    var out=[];for(var i=0;i<8;i++)out.push((h[i]>>>24)&255,(h[i]>>>16)&255,(h[i]>>>8)&255,h[i]&255);return out;
+}
+function proofHex(bytes){return bytes.map(function(x){return ("0"+x.toString(16)).slice(-2);}).join("");}
+function proofSha(text){return proofHex(proofShaBytes(proofBytes(text)));}
+function proofHmac(key,message){
+    var k=proofBytes(key);if(k.length>64)k=proofShaBytes(k);while(k.length<64)k.push(0);
+    var i=k.map(function(b){return b^54;}),o=k.map(function(b){return b^92;});
+    return proofHex(proofShaBytes(o.concat(proofShaBytes(i.concat(proofBytes(message))))));
+}
+function proofEqual(a,b){if(typeof a!=="string"||typeof b!=="string"||a.length!==64||b.length!==64)return false;var diff=0;for(var i=0;i<64;i++)diff|=a.charCodeAt(i)^b.charCodeAt(i);return diff===0;}
+function proofAscii(v){return JSON.stringify(v).replace(/[\u007f-\uffff]/g,function(c){return "\\u"+("0000"+c.charCodeAt(0).toString(16)).slice(-4);});}
+function proofExact(v,keys){return object(v)&&Object.keys(v).length===keys.length&&Object.keys(v).every(function(k){return keys.indexOf(k)>=0;});}
+function proofPid(v){return Number.isInteger(v)&&v>0&&v<4294967296;}
+function proofBirth(v){return v===null||(typeof v==="string"&&/^[1-9][0-9]{14,19}$/.test(v)&&(v.length<20||v<="18446744073709551615"));}
+function proofSession(v){return typeof v==="string"&&/^[!-~]{1,160}$/.test(v);}
+function publishOwnerProofPath(){return requireWithin(PluginDir+"/publish-owner-proof.json",PluginDir);}
+function publishRecoveryChallenge(){
+    try{
+        if(!Bridge.publishRecovery||!Bridge.publishRecovery.blocked)return null;
+        var lease=readPublishLease(),actual=currentPublishOwner();
+        return {schema:1,sessionId:SESSION,hostPid:actual.pid,project:canonical(Config.projectPath),leaseSha256:proofSha(lease.raw)};
+    }catch(_){return null;}
+}
+function readPublishOwnerProof(lease,actual){
+    function invalid(message){throw bridgeError("PUBLISH_OWNER_PROOF_INVALID",message);}
+    var path=publishOwnerProofPath();
+    if(!CS.System.IO.File.Exists(path))throw bridgeError("PUBLISH_OWNER_UNAVAILABLE","Fresh external Windows-helper owner proof required");
+    var length=Number(new CS.System.IO.FileInfo(path).Length);
+    if(!Number.isInteger(length)||length<2||length>8192)invalid("Bounded owner proof required");
+    var raw=String(CS.System.IO.File.ReadAllText(path)).replace(/^\ufeff/,""),envelope,p;
+    try{envelope=JSON.parse(raw);if(!proofExact(envelope,["payload","signature"])||raw!==JSON.stringify(envelope)||typeof envelope.payload!=="string"||envelope.payload.length>4096||/[^\x00-\x7f]/.test(envelope.payload)||typeof envelope.signature!=="string"||!/^[0-9a-f]{64}$/.test(envelope.signature))invalid("Canonical signed envelope required");p=JSON.parse(envelope.payload);}catch(_){invalid("Invalid owner proof JSON");}
+    if(!proofEqual(proofHmac(Config.token,"fgui-publish-owner-proof-v1\n"+envelope.payload),envelope.signature))invalid("Owner proof authentication failed");
+    if(!proofExact(p,["schema","project","hostSession","hostPid","leaseSha256","requestId","issuedAtMs","expiresAtMs","owner"])||envelope.payload!==proofAscii(p)||p.schema!==1)invalid("Exact owner proof schema required");
+    if(p.project!==canonical(Config.projectPath)||p.hostSession!==SESSION||p.hostPid!==actual.pid||p.leaseSha256!==proofSha(lease.raw)||p.requestId!==lease.value.requestId)invalid("Proof differs from exact host/session/lease");
+    var now=Date.now();
+    if(!Number.isSafeInteger(p.issuedAtMs)||p.issuedAtMs<1||!Number.isSafeInteger(p.expiresAtMs)||p.expiresAtMs<=p.issuedAtMs||p.expiresAtMs-p.issuedAtMs>5000||p.issuedAtMs>now+250||now>=p.expiresAtMs)invalid("Owner proof expired or clock invalid");
+    var o=p.owner;
+    if(!proofExact(o,["pid","expectedStartedFileTime","observedStartedFileTime","state","reason","win32Error"])||!proofPid(o.pid)||o.pid!==lease.value.pid||!proofBirth(o.expectedStartedFileTime)||!proofBirth(o.observedStartedFileTime)||o.expectedStartedFileTime!==lease.value.startedFileTime||!Number.isInteger(o.win32Error)||o.win32Error<0||o.win32Error>=4294967296)invalid("Owner evidence identity differs");
+    var reasons={absent:["open-invalid-parameter-complete-census-absent"],exited:["signaled-process-handle"],replaced:["creation-time-differs"],live:["creation-time-matches","pid-presence-conservative"],unknown:["open-failed","census-unconfirmed","wait-failed","times-failed","close-failed","probe-failed","platform-unavailable"]};
+    if(typeof o.state!=="string"||!Object.prototype.hasOwnProperty.call(reasons,o.state)||reasons[o.state].indexOf(o.reason)<0)invalid("Inconsistent owner evidence");
+    if(o.state==="absent"&&o.win32Error!==87)invalid("Absent owner evidence lacks positive absence");
+    if(o.state==="replaced"&&(o.expectedStartedFileTime===null||o.observedStartedFileTime===null||o.expectedStartedFileTime===o.observedStartedFileTime))invalid("PID replacement requires distinct exact creation times");
+    if(o.state==="live"&&(o.observedStartedFileTime===null||(o.expectedStartedFileTime!==null&&o.expectedStartedFileTime!==o.observedStartedFileTime)||o.reason!==(o.expectedStartedFileTime===null?"pid-presence-conservative":"creation-time-matches")))invalid("Live owner evidence differs");
+    var blocked=o.state==="live"||o.state==="unknown"||(o.pid===actual.pid&&o.state!=="replaced");
+    return {live:blocked,proof:o.reason==="times-failed"?"pid-presence-conservative":o.reason,unknown:o.state==="unknown"&&o.reason!=="times-failed",raw:raw,path:path};
+}
+
+// A durable lease is not cancellation. Same-process reloads never assume the
+// old native Task ended; only a proven absent/replaced owner allows recovery.
+function publishLeasePath(){return requireWithin(PluginDir+"/publish-lease.json",PluginDir);}
+function publishProcessIdentity(p){
+    var id=Number(p.Id),started=null;
+    // Unity IL2CPP6.0.5 rejects GetProcessTimes. Missing birth evidence must
+    // keep a matching PID blocked, never infer that its old owner exited.
+    try{var value=String(p.StartTime.ToFileTimeUtc());if(/^[0-9]{15,22}$/.test(value))started=value;}catch(_){}
+    if(!Number.isSafeInteger(id)||id<1)throw bridgeError("PUBLISH_OWNER_UNAVAILABLE","Native process identity unavailable");
+    return {pid:id,startedFileTime:started};
+}
+function currentPublishOwner(){
+    var p;
+    try{p=CS.System.Diagnostics.Process.GetCurrentProcess();return publishProcessIdentity(p);}
+    catch(_){throw bridgeError("PUBLISH_OWNER_UNAVAILABLE","Native process identity unavailable");}
+    finally{try{if(p)p.Dispose();}catch(_){}}
+}
+function publishOwnerLive(lease){
+    // Query only this host; other-process evidence comes from the signed helper.
+    var actual=currentPublishOwner(),v=lease.value;
+    if(actual.pid===v.pid){
+        if(v.startedFileTime===null || (actual.startedFileTime!==null && actual.startedFileTime===v.startedFileTime))return {live:true,proof:v.startedFileTime===null?"pid-presence-conservative":"current-pid-and-creation"};
+        if(actual.startedFileTime===null && !CS.System.IO.File.Exists(publishOwnerProofPath()))return {live:true,proof:"pid-presence-conservative"};
+    }
+    var evidence=readPublishOwnerProof(lease,actual);
+    if(evidence.unknown)throw bridgeError("PUBLISH_OWNER_UNAVAILABLE","External helper reports unknown owner state; preserving interrupted publish");
+    return evidence;
+}
+function savedPublishMode(){
+    var path=requireWithin(Config.projectPath+"/settings/Publish.json",Config.projectPath),length=Number(new CS.System.IO.FileInfo(path).Length),v;
+    if(!Number.isInteger(length)||length<2||length>262144)throw bridgeError("PUBLISH_SETTINGS_CONFLICT","Bounded persisted Publish settings required");
+    try{v=JSON.parse(String(CS.System.IO.File.ReadAllText(path)).replace(/^\ufeff/,""));}catch(_){throw bridgeError("PUBLISH_SETTINGS_CONFLICT","Persisted Publish settings are invalid; preserved");}
+    if(!object(v)||!Number.isInteger(v.branchProcessing))throw bridgeError("PUBLISH_SETTINGS_CONFLICT","Persisted native branch mode missing");
+    return v.branchProcessing;
+}
+function readPublishLease(){
+    var path=publishLeasePath(),length=Number(new CS.System.IO.FileInfo(path).Length);
+    if(!Number.isInteger(length)||length<2||length>4096)throw bridgeError("PUBLISH_LEASE_INVALID","Bounded canonical publish lease required");
+    var raw=String(CS.System.IO.File.ReadAllText(path)).replace(/^\ufeff/,""),v;
+    try{v=JSON.parse(raw);}catch(_){throw bridgeError("PUBLISH_LEASE_INVALID","Malformed publish lease; preserved for inspection");}
+    var keys=["schema","project","pid","startedFileTime","sessionId","requestId","before","effective"];
+    if(!object(v)||raw!==JSON.stringify(v)||Object.keys(v).length!==keys.length||Object.keys(v).some(function(k){return keys.indexOf(k)<0;})||v.schema!==1||v.project!==canonical(Config.projectPath)||!Number.isSafeInteger(v.pid)||v.pid<1||!proofBirth(v.startedFileTime)||typeof v.sessionId!=="string"||v.sessionId.length<1||v.sessionId.length>160||typeof v.requestId!=="string"||!UUID.test(v.requestId)||(v.before!==0&&v.before!==1)||(v.effective!==0&&v.effective!==1))throw bridgeError("PUBLISH_LEASE_INVALID","Invalid publish lease identity/fields; preserved for inspection");
+    return {value:v,raw:raw};
+}
+function claimPublishLease(job){
+    var path=publishLeasePath(),owner=currentPublishOwner();
+    var raw=JSON.stringify({schema:1,project:canonical(Config.projectPath),pid:owner.pid,startedFileTime:owner.startedFileTime,sessionId:SESSION,requestId:job.requestId,before:job.publishMode.previousBranchProcessing,effective:job.publishMode.effectiveBranchProcessing});
+    if(CS.System.IO.File.Exists(path)){Bridge.publishRecovery={blocked:true,status:"existing-lease"};throw bridgeError("PUBLISH_RECOVERY_PENDING","An existing native publish lease requires recovery");}
+    var stream,writer;
+    try{
+        // CreateNew is the cross-host claim, never truncate an existing lease.
+        stream=CS.System.IO.File.Open(path,CS.System.IO.FileMode.CreateNew,CS.System.IO.FileAccess.Write,CS.System.IO.FileShare.None);
+        writer=new CS.System.IO.StreamWriter(stream,CS.System.Text.Encoding.UTF8);writer.Write(raw);writer.Flush();stream.Flush();writer.Close();writer=null;stream=null;
+        var checked=readPublishLease();if(checked.raw!==raw)throw Error("Lease readback mismatch");
+        job.publishLeaseRaw=raw;
+    }catch(e){plog("PUBLISH_LEASE_CLAIM_FAILED",e);Bridge.publishRecovery={blocked:true,status:"claim-failed",errorCode:"PUBLISH_LEASE_IO"};throw bridgeError("PUBLISH_LEASE_IO","Publish lease claim failed; preserve the record and inspect recovery status");}
+    finally{try{if(writer)writer.Close();else if(stream)stream.Close();}catch(_){}}
+}
+function releasePublishLease(job){
+    if(!job.publishLeaseRaw)return;
+    try{
+        var lease=readPublishLease();
+        if(lease.raw!==job.publishLeaseRaw)throw bridgeError("PUBLISH_LEASE_CHANGED","Publish lease changed externally; preserved");
+        CS.System.IO.File.Delete(publishLeasePath());
+        if(CS.System.IO.File.Exists(publishLeasePath()))throw bridgeError("PUBLISH_LEASE_IO","Publish lease deletion did not persist");
+        job.publishLeaseRaw=null;
+    }catch(e){Bridge.publishRecovery={blocked:true,status:"release-failed",errorCode:e.bridgeCode || "PUBLISH_LEASE_IO"};throw e;}
+}
+function recoverPublishLease(){
+    var recoveryLock;
+    try{
+        if(!CS.System.IO.File.Exists(publishLeasePath())){Bridge.publishRecovery={blocked:false,status:"clean"};return;}
+        if(!projectAllowed()){Bridge.publishRecovery={blocked:true,status:"waiting-project"};return;}
+        var lockPath=requireWithin(PluginDir+"/publish-proof.lock",PluginDir);
+        try{recoveryLock=CS.System.IO.File.Open(lockPath,CS.System.IO.FileMode.OpenOrCreate,CS.System.IO.FileAccess.ReadWrite,CS.System.IO.FileShare.None);}catch(_){Bridge.publishRecovery={blocked:true,status:"waiting-proof-lock",errorCode:"PUBLISH_RECOVERY_PENDING"};return;}
+        var lease=readPublishLease(),v=lease.value;
+        var owner=publishOwnerLive(lease);
+        if(owner.live){Bridge.publishRecovery={blocked:true,status:"owner-live",ownerPid:v.pid,ownerProof:owner.proof};return;}
+        var g=App.project.GetSettings("Publish"),persisted=savedPublishMode();
+        if((g.branchProcessing!==v.before && g.branchProcessing!==v.effective)||(persisted!==v.before&&persisted!==v.effective))throw bridgeError("PUBLISH_SETTINGS_CONFLICT","Settings differ from interrupted publish record; preserving both");
+        if(readPublishLease().raw!==lease.raw)throw bridgeError("PUBLISH_LEASE_CHANGED","Publish lease changed during recovery");
+        if(String(CS.System.IO.File.ReadAllText(owner.path)).replace(/^\ufeff/,"")!==owner.raw)throw bridgeError("PUBLISH_OWNER_PROOF_CHANGED","Recovery proof changed during verification");
+        Coordination.revision++;Coordination.cursors=Object.create(null);
+        if(g.branchProcessing!==v.before || persisted!==v.before){g.branchProcessing=v.before;if(g.branchProcessing!==v.before)throw bridgeError("PUBLISH_SETTINGS_READBACK","Interrupted mode restore readback mismatch");g.Touch();g.Save();}
+        if(g.branchProcessing!==v.before || savedPublishMode()!==v.before)throw bridgeError("PUBLISH_SETTINGS_READBACK","Interrupted mode restore did not persist");
+        // Remove the exact proof before its lease. A crash leaves either a
+        // guarded pending lease needing fresh proof, or a fully clean pair.
+        if(readPublishLease().raw!==lease.raw)throw bridgeError("PUBLISH_LEASE_CHANGED","Publish lease changed after native restore");
+        if(String(CS.System.IO.File.ReadAllText(owner.path)).replace(/^\ufeff/,"")!==owner.raw)throw bridgeError("PUBLISH_OWNER_PROOF_CHANGED","Recovery proof changed after restore");
+        CS.System.IO.File.Delete(owner.path);
+        if(CS.System.IO.File.Exists(owner.path))throw bridgeError("PUBLISH_LEASE_IO","Proof cleanup did not persist");
+        releasePublishLease({publishLeaseRaw:lease.raw});
+        Bridge.publishRecovery={blocked:false,status:"recovered",oldOwnerPid:v.pid,restoredBranchProcessing:v.before};
+        plog("PUBLISH_LEASE_RECOVERED",null,Bridge.publishRecovery);
+    }catch(e){Bridge.publishRecovery={blocked:true,status:"recovery-failed",errorCode:e.bridgeCode || "PUBLISH_LEASE_IO"};plog("PUBLISH_RECOVERY_FAILED",e);}
+    finally{try{if(recoveryLock)recoveryLock.Close();}catch(_){Bridge.publishRecovery={blocked:true,status:"lock-release-failed",errorCode:"PUBLISH_LEASE_IO"};}}
+}
 // ---------------- bounded asynchronous publish (upstream PublishHandler adapter) ----------------
+function preparePublishMode(job,global) {
+    var mode=job.args.branchMode || "configured",old=global.branchProcessing;
+    if(typeof old!=="number" || (old!==0 && old!==1))throw bridgeError("CAPABILITY_UNSUPPORTED","Native branchProcessing must be supported numeric0/1");
+    if(job.args.branch){
+        var branches=App.project.allBranches,found=false;
+        if(!branches || !Number.isInteger(Number(branches.Count)) || Number(branches.Count)>1000)throw bridgeError("CAPABILITY_UNSUPPORTED","Bounded native project branches unavailable");
+        for(var i=0;i<Number(branches.Count);i++)if(String(branches.get_Item(i))===job.args.branch)found=true;
+        if(!found)throw bridgeError("BRANCH_NOT_FOUND","Selected project branch does not exist");
+    }
+    if(mode==="configured" && old===0 && job.args.branch)throw bridgeError("PUBLISH_BRANCH_IGNORED","Current settings include all branches; use branchMode=selected or omit branch");
+    var value=mode==="all"?0:(mode==="selected" || mode==="trunk")?1:old;
+    job.publishMode={requested:mode,branch:job.args.branch || "",effectiveBranchProcessing:value,previousBranchProcessing:old,temporaryOverride:value!==old,restored:value===old};
+    claimPublishLease(job);
+    if(value!==old){
+        job.publishSettings=global;
+        global.branchProcessing=value;
+        if(global.branchProcessing!==value)throw bridgeError("PUBLISH_SETTINGS_READBACK","branchProcessing override did not persist in native settings");
+    }
+}
+function restorePublishMode(job) {
+    if(!job.publishSettings || job.publishMode.restored){releasePublishLease(job);return;}
+    var g=job.publishSettings,m=job.publishMode;
+    if(g.branchProcessing!==m.effectiveBranchProcessing && g.branchProcessing!==m.previousBranchProcessing)throw bridgeError("PUBLISH_SETTINGS_CONFLICT","Publish settings changed externally; preserving that value");
+    g.branchProcessing=m.previousBranchProcessing;
+    if(g.branchProcessing!==m.previousBranchProcessing)throw bridgeError("PUBLISH_SETTINGS_READBACK","branchProcessing restore readback mismatch");
+    g.Touch();g.Save();m.restored=true;releasePublishLease(job);
+}
+function recordPublishCleanup(job,error) {
+    Bridge.lastPublishCleanup={requestId:job.requestId,ok:!error,branchMode:job.publishMode || null,errorCode:error?(error.bridgeCode || "PUBLISH_RESTORE_FAILED"):null};
+}
+function publishFinished(job) {
+    // Run returns a managed Task. Completion callback alone is a fallback only
+    // when a host binding omits that return value, never a claim of cancellation.
+    if(job.publishTask)return !!job.publishTask.IsCompleted;
+    return !!job.done;
+}
 function startPublish(job) {
     if(App.docView.HasUnsavedDocuments())throw bridgeError("UNSAVED_DOCUMENTS","Save documents before publish");
     var pkg=getPkg(job.args.pkg),global=App.project.GetSettings("Publish"),settings=pkg.publishSettings;
+    Bridge.lastPublishCleanup=null;
+    preparePublishMode(job,global);
     CS.System.IO.Directory.CreateDirectory(Config.publishDir);
     global.path=Config.publishDir;global.branchPath=Config.publishDir;global.binaryFormat=true;global.compressDesc=false;
     global.codeGeneration.allowGenCode=false;global.codeGeneration.codePath=Config.publishDir+"/code";global.Touch();global.Save();
@@ -872,15 +1093,17 @@ function startPublish(job) {
     job.deadline=Math.min(job.deadline,job.t0+(job.args.timeout_ms || LIMIT.maxMs));
     job.publishCallback=function(){job.done=true;};
     handler.add_onComplete(job.publishCallback);
-    handler.Run(); // Original upstream public API; normal editor checks remain untouched.
+    job.nativeStarted=true;job.publishTask=handler.Run(); // Real async task, never treat Exit as synchronous cancellation.
 }
 function detachPublish(job) { try {if(job.handler && job.publishCallback)job.handler.remove_onComplete(job.publishCallback);}catch(_){plog("PUBLISH_DETACH_FAILED");} }
 function stepPublish(job) {
-    if(!job.done)return null;
+    if(!publishFinished(job))return null;
+    restorePublishMode(job);recordPublishCleanup(job,null);
     var handler=job.handler,success=!!handler.isSuccess,files=[];
+    if(job.publishTask && (job.publishTask.IsFaulted || job.publishTask.IsCanceled))success=false;
     if(canonical(handler.exportPath)!==canonical(Config.publishDir))throw bridgeError("PUBLISH_PATH_CHANGED","Publish handler path changed");
     try {var found=CS.System.IO.Directory.GetFiles(Config.publishDir);for(var i=0;i<Math.min(Number(found.Length),1024);i++)files.push(String(found.GetValue(i)));}catch(_){plog("PUBLISH_LIST_FILES_FAILED");}
-    var out={ok:success,data:{isSuccess:success,elapsedMs:Date.now()-job.t0,files:files,exportPath:Config.publishDir,verified:false},error:success?null:{code:"PUBLISH_FAILED",message:"Editor PublishHandler reported isSuccess=false"}};
+    var out={ok:success,data:{isSuccess:success,elapsedMs:Date.now()-job.t0,branchMode:job.publishMode,files:files,exportPath:Config.publishDir,verified:false},error:success?null:{code:"PUBLISH_FAILED",message:"Editor PublishHandler reported isSuccess=false"}};
     detachPublish(job);return out;
 }
 var ASYNC_STARTERS={publish:startPublish},ASYNC_STEPPERS={publish:stepPublish};
@@ -1006,12 +1229,14 @@ function pumpReaders() {
         }
     }
 }
-function complete(job,out) {
+function complete(job,out,retainCurrent) {
+    if(job.responded){if(!retainCurrent && Bridge.current===job)Bridge.current=null;return;}
+    job.responded=true;
     if(job.writeClaimed)Coordination.revision++;
     var sent=writeResponse(job.ctx,200,out,job),seen=Bridge.seen[job.requestId];
     seen.done=true;seen.response=sent;Bridge.completed.push(job.requestId);
     if(Bridge.completed.length>LIMIT.cache){var evicted=Bridge.completed.shift();Bridge.seen[evicted].response=null;}
-    if(Bridge.current===job)Bridge.current=null;
+    if(!retainCurrent && Bridge.current===job)Bridge.current=null;
 }
 function execute(job) {
     Bridge.itemCount=0;
@@ -1025,9 +1250,22 @@ function stepQueue() {
     var job=Bridge.current;
     if(!job){job=Bridge.queue.shift();if(!job)return;Bridge.current=job;}
     try {
+        // Drain independently of deadline or project changes. No later command may
+        // overlap an unfinished native publisher, even after the response timed out.
+        if(job.phase==="publish-drain"){
+            if(!publishFinished(job))return;
+            try{restorePublishMode(job);recordPublishCleanup(job,null);}catch(cleanupError){recordPublishCleanup(job,cleanupError);plog(cleanupError.bridgeCode || "PUBLISH_RESTORE_FAILED",cleanupError);}
+            detachPublish(job);complete(job,null);return;
+        }
         assertProject();
+        if(Bridge.publishRecovery && Bridge.publishRecovery.blocked && job.cmd!=="bridge_log")throw bridgeError("PUBLISH_RECOVERY_PENDING","Interrupted native publish owner/settings require recovery; inspect ping.publishRecovery");
         if(Date.now()>=job.deadline){
-            if(job.handler){try{job.handler.Exit();}catch(_){plog("PUBLISH_EXIT_FAILED");}detachPublish(job);}
+            if(job.nativeStarted && !publishFinished(job)){
+                job.phase="publish-drain";
+                complete(job,fail("Request deadline exceeded; native publish is still running, queue retained until completion; do not retry automatically","DEADLINE_EXCEEDED"),true);return;
+            }
+            if(job.handler)detachPublish(job);
+            restorePublishMode(job);
             complete(job,fail("Request deadline exceeded; operation will not be replayed","DEADLINE_EXCEEDED"));return;
         }
         if(job.phase==="publish-wait"){var out=stepPublish(job);if(out)complete(job,out);return;}
@@ -1040,7 +1278,13 @@ function stepQueue() {
         if(job.cmd==="publish"){job.phase="publish-wait";startPublish(job);return;}
         if(DOCUMENT_COMMANDS.indexOf(job.cmd)>=0){job.opened=ensureDocOpen(getPkg(job.args.pkg),job.args.name);job.phase="document-wait";job.openFrame=Bridge.frame;return;}
         execute(job);
-    }catch(e){if(job.handler)detachPublish(job);plog(e.bridgeCode || "EDITOR_API_ERROR",e);complete(job,fail(e.bridgeCode?e.message:"Editor API call failed; operation may be partially applied and will not be replayed",e.bridgeCode || "EDITOR_API_ERROR"));}
+    }catch(e){
+        var draining=job.nativeStarted && !publishFinished(job);
+        if(draining)job.phase="publish-drain";
+        else {if(job.handler)detachPublish(job);try{restorePublishMode(job);if(job.publishMode)recordPublishCleanup(job,null);}catch(cleanupError){recordPublishCleanup(job,cleanupError);e=cleanupError;}}
+        plog(e.bridgeCode || "EDITOR_API_ERROR",e);
+        complete(job,fail(e.bridgeCode?e.message:"Editor API call failed; operation may be partially applied and will not be replayed",e.bridgeCode || "EDITOR_API_ERROR"),draining);
+    }
 }
 function startServer() {
     if(Bridge.listener || !Config)return;
@@ -1049,7 +1293,7 @@ function startServer() {
         Bridge.listener=listener;Bridge.port=Config.port;Bridge.pendingAccept=listener.BeginGetContext(null,null);plog("LISTENER_STARTED");
     }catch(_){try{if(listener)listener.Close();}catch(__){}Bridge.listener=null;Bridge.pendingAccept=null;plog("LISTENER_START_FAILED");}
 }
-function projectOpened() { startServer(); }
+function projectOpened() { recoverPublishLease();startServer(); }
 function pumpFrom(source) {
     if(Bridge.stopped)return;
     if(source==="app")Bridge.appEntries++;else Bridge.timerEntries++;
@@ -1070,6 +1314,7 @@ function pumpFrom(source) {
     Bridge.lastUnityFrame=unityFrame;Bridge.pumping=true;
     try{
         Bridge.frame++;Bridge.updatedAtMs=now;
+        if(!Bridge.current && Bridge.publishRecovery && Bridge.publishRecovery.blocked && now>=(Bridge.nextRecoveryAt || 0)){Bridge.nextRecoveryAt=now+2000;recoverPublishLease();}
         // Each stage is isolated; no waits, normal stream Close or worker-thread JS callbacks.
         try{pumpWriters();}catch(error){plog("WRITE_PUMP_ERROR",error);}
         try{pumpAccepts();}catch(error){plog("ACCEPT_PUMP_ERROR",error);}
@@ -1089,6 +1334,7 @@ function loadConfig() {
 function boot() {
     plog("BOOT_STARTED");
     try{Config=loadConfig();}catch(_){plog("CONFIG_LOAD_FAILED");plog("BOOT_RETURNED");return;}
+    recoverPublishLease();
     acquireBackgroundHold();
     try{App.add_onUpdate(onUpdate);Bridge.subscribed=true;plog("UPDATE_SUBSCRIBED");}catch(_){plog("UPDATE_SUBSCRIBE_FAILED");}
     try{FairyGUI.Timers.inst.AddUpdate(onTimerUpdate);Bridge.timerSubscribed=true;plog("TIMER_SUBSCRIBED");}catch(error){plog("TIMER_SUBSCRIBE_FAILED",error);}
@@ -1103,7 +1349,11 @@ function onDestroy() {
     try{if(Bridge.subscribed)App.remove_onUpdate(onUpdate);}catch(_){}Bridge.subscribed=false;
     try{App.remove_onProjectOpened(projectOpened);}catch(_){}
     try{if(Bridge.timerSubscribed)FairyGUI.Timers.inst.Remove(onTimerUpdate);}catch(error){plog("TIMER_UNSUBSCRIBE_FAILED",error);}Bridge.timerSubscribed=false;
-    try{if(Bridge.current && Bridge.current.handler)detachPublish(Bridge.current);}catch(_){}
+    try{if(Bridge.current && Bridge.current.handler){
+        if(!Bridge.current.nativeStarted || publishFinished(Bridge.current))restorePublishMode(Bridge.current);
+        else plog("PUBLISH_ACTIVE_ON_UNLOAD"); // No cancellation or restoration guarantee during host/plugin teardown.
+        detachPublish(Bridge.current);
+    }}catch(_){plog("PUBLISH_UNLOAD_RESTORE_FAILED");}
     Bridge.readers.forEach(function(r){try{r.ctx.Response.Abort();}catch(_){}});
     Bridge.writers.forEach(function(w){try{w.ctx.Response.Abort();}catch(_){}});
     try{if(Bridge.listener)Bridge.listener.Close();}catch(_){}Bridge.listener=null;

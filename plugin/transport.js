@@ -1,7 +1,45 @@
 // ---------------- bounded asynchronous publish (upstream PublishHandler adapter) ----------------
+function preparePublishMode(job,global) {
+    var mode=job.args.branchMode || "configured",old=global.branchProcessing;
+    if(typeof old!=="number" || (old!==0 && old!==1))throw bridgeError("CAPABILITY_UNSUPPORTED","Native branchProcessing must be supported numeric0/1");
+    if(job.args.branch){
+        var branches=App.project.allBranches,found=false;
+        if(!branches || !Number.isInteger(Number(branches.Count)) || Number(branches.Count)>1000)throw bridgeError("CAPABILITY_UNSUPPORTED","Bounded native project branches unavailable");
+        for(var i=0;i<Number(branches.Count);i++)if(String(branches.get_Item(i))===job.args.branch)found=true;
+        if(!found)throw bridgeError("BRANCH_NOT_FOUND","Selected project branch does not exist");
+    }
+    if(mode==="configured" && old===0 && job.args.branch)throw bridgeError("PUBLISH_BRANCH_IGNORED","Current settings include all branches; use branchMode=selected or omit branch");
+    var value=mode==="all"?0:(mode==="selected" || mode==="trunk")?1:old;
+    job.publishMode={requested:mode,branch:job.args.branch || "",effectiveBranchProcessing:value,previousBranchProcessing:old,temporaryOverride:value!==old,restored:value===old};
+    claimPublishLease(job);
+    if(value!==old){
+        job.publishSettings=global;
+        global.branchProcessing=value;
+        if(global.branchProcessing!==value)throw bridgeError("PUBLISH_SETTINGS_READBACK","branchProcessing override did not persist in native settings");
+    }
+}
+function restorePublishMode(job) {
+    if(!job.publishSettings || job.publishMode.restored){releasePublishLease(job);return;}
+    var g=job.publishSettings,m=job.publishMode;
+    if(g.branchProcessing!==m.effectiveBranchProcessing && g.branchProcessing!==m.previousBranchProcessing)throw bridgeError("PUBLISH_SETTINGS_CONFLICT","Publish settings changed externally; preserving that value");
+    g.branchProcessing=m.previousBranchProcessing;
+    if(g.branchProcessing!==m.previousBranchProcessing)throw bridgeError("PUBLISH_SETTINGS_READBACK","branchProcessing restore readback mismatch");
+    g.Touch();g.Save();m.restored=true;releasePublishLease(job);
+}
+function recordPublishCleanup(job,error) {
+    Bridge.lastPublishCleanup={requestId:job.requestId,ok:!error,branchMode:job.publishMode || null,errorCode:error?(error.bridgeCode || "PUBLISH_RESTORE_FAILED"):null};
+}
+function publishFinished(job) {
+    // Run returns a managed Task. Completion callback alone is a fallback only
+    // when a host binding omits that return value, never a claim of cancellation.
+    if(job.publishTask)return !!job.publishTask.IsCompleted;
+    return !!job.done;
+}
 function startPublish(job) {
     if(App.docView.HasUnsavedDocuments())throw bridgeError("UNSAVED_DOCUMENTS","Save documents before publish");
     var pkg=getPkg(job.args.pkg),global=App.project.GetSettings("Publish"),settings=pkg.publishSettings;
+    Bridge.lastPublishCleanup=null;
+    preparePublishMode(job,global);
     CS.System.IO.Directory.CreateDirectory(Config.publishDir);
     global.path=Config.publishDir;global.branchPath=Config.publishDir;global.binaryFormat=true;global.compressDesc=false;
     global.codeGeneration.allowGenCode=false;global.codeGeneration.codePath=Config.publishDir+"/code";global.Touch();global.Save();
@@ -13,15 +51,17 @@ function startPublish(job) {
     job.deadline=Math.min(job.deadline,job.t0+(job.args.timeout_ms || LIMIT.maxMs));
     job.publishCallback=function(){job.done=true;};
     handler.add_onComplete(job.publishCallback);
-    handler.Run(); // Original upstream public API; normal editor checks remain untouched.
+    job.nativeStarted=true;job.publishTask=handler.Run(); // Real async task, never treat Exit as synchronous cancellation.
 }
 function detachPublish(job) { try {if(job.handler && job.publishCallback)job.handler.remove_onComplete(job.publishCallback);}catch(_){plog("PUBLISH_DETACH_FAILED");} }
 function stepPublish(job) {
-    if(!job.done)return null;
+    if(!publishFinished(job))return null;
+    restorePublishMode(job);recordPublishCleanup(job,null);
     var handler=job.handler,success=!!handler.isSuccess,files=[];
+    if(job.publishTask && (job.publishTask.IsFaulted || job.publishTask.IsCanceled))success=false;
     if(canonical(handler.exportPath)!==canonical(Config.publishDir))throw bridgeError("PUBLISH_PATH_CHANGED","Publish handler path changed");
     try {var found=CS.System.IO.Directory.GetFiles(Config.publishDir);for(var i=0;i<Math.min(Number(found.Length),1024);i++)files.push(String(found.GetValue(i)));}catch(_){plog("PUBLISH_LIST_FILES_FAILED");}
-    var out={ok:success,data:{isSuccess:success,elapsedMs:Date.now()-job.t0,files:files,exportPath:Config.publishDir,verified:false},error:success?null:{code:"PUBLISH_FAILED",message:"Editor PublishHandler reported isSuccess=false"}};
+    var out={ok:success,data:{isSuccess:success,elapsedMs:Date.now()-job.t0,branchMode:job.publishMode,files:files,exportPath:Config.publishDir,verified:false},error:success?null:{code:"PUBLISH_FAILED",message:"Editor PublishHandler reported isSuccess=false"}};
     detachPublish(job);return out;
 }
 var ASYNC_STARTERS={publish:startPublish},ASYNC_STEPPERS={publish:stepPublish};
@@ -147,12 +187,14 @@ function pumpReaders() {
         }
     }
 }
-function complete(job,out) {
+function complete(job,out,retainCurrent) {
+    if(job.responded){if(!retainCurrent && Bridge.current===job)Bridge.current=null;return;}
+    job.responded=true;
     if(job.writeClaimed)Coordination.revision++;
     var sent=writeResponse(job.ctx,200,out,job),seen=Bridge.seen[job.requestId];
     seen.done=true;seen.response=sent;Bridge.completed.push(job.requestId);
     if(Bridge.completed.length>LIMIT.cache){var evicted=Bridge.completed.shift();Bridge.seen[evicted].response=null;}
-    if(Bridge.current===job)Bridge.current=null;
+    if(!retainCurrent && Bridge.current===job)Bridge.current=null;
 }
 function execute(job) {
     Bridge.itemCount=0;
@@ -166,9 +208,22 @@ function stepQueue() {
     var job=Bridge.current;
     if(!job){job=Bridge.queue.shift();if(!job)return;Bridge.current=job;}
     try {
+        // Drain independently of deadline or project changes. No later command may
+        // overlap an unfinished native publisher, even after the response timed out.
+        if(job.phase==="publish-drain"){
+            if(!publishFinished(job))return;
+            try{restorePublishMode(job);recordPublishCleanup(job,null);}catch(cleanupError){recordPublishCleanup(job,cleanupError);plog(cleanupError.bridgeCode || "PUBLISH_RESTORE_FAILED",cleanupError);}
+            detachPublish(job);complete(job,null);return;
+        }
         assertProject();
+        if(Bridge.publishRecovery && Bridge.publishRecovery.blocked && job.cmd!=="bridge_log")throw bridgeError("PUBLISH_RECOVERY_PENDING","Interrupted native publish owner/settings require recovery; inspect ping.publishRecovery");
         if(Date.now()>=job.deadline){
-            if(job.handler){try{job.handler.Exit();}catch(_){plog("PUBLISH_EXIT_FAILED");}detachPublish(job);}
+            if(job.nativeStarted && !publishFinished(job)){
+                job.phase="publish-drain";
+                complete(job,fail("Request deadline exceeded; native publish is still running, queue retained until completion; do not retry automatically","DEADLINE_EXCEEDED"),true);return;
+            }
+            if(job.handler)detachPublish(job);
+            restorePublishMode(job);
             complete(job,fail("Request deadline exceeded; operation will not be replayed","DEADLINE_EXCEEDED"));return;
         }
         if(job.phase==="publish-wait"){var out=stepPublish(job);if(out)complete(job,out);return;}
@@ -181,7 +236,13 @@ function stepQueue() {
         if(job.cmd==="publish"){job.phase="publish-wait";startPublish(job);return;}
         if(DOCUMENT_COMMANDS.indexOf(job.cmd)>=0){job.opened=ensureDocOpen(getPkg(job.args.pkg),job.args.name);job.phase="document-wait";job.openFrame=Bridge.frame;return;}
         execute(job);
-    }catch(e){if(job.handler)detachPublish(job);plog(e.bridgeCode || "EDITOR_API_ERROR",e);complete(job,fail(e.bridgeCode?e.message:"Editor API call failed; operation may be partially applied and will not be replayed",e.bridgeCode || "EDITOR_API_ERROR"));}
+    }catch(e){
+        var draining=job.nativeStarted && !publishFinished(job);
+        if(draining)job.phase="publish-drain";
+        else {if(job.handler)detachPublish(job);try{restorePublishMode(job);if(job.publishMode)recordPublishCleanup(job,null);}catch(cleanupError){recordPublishCleanup(job,cleanupError);e=cleanupError;}}
+        plog(e.bridgeCode || "EDITOR_API_ERROR",e);
+        complete(job,fail(e.bridgeCode?e.message:"Editor API call failed; operation may be partially applied and will not be replayed",e.bridgeCode || "EDITOR_API_ERROR"),draining);
+    }
 }
 function startServer() {
     if(Bridge.listener || !Config)return;
@@ -190,7 +251,7 @@ function startServer() {
         Bridge.listener=listener;Bridge.port=Config.port;Bridge.pendingAccept=listener.BeginGetContext(null,null);plog("LISTENER_STARTED");
     }catch(_){try{if(listener)listener.Close();}catch(__){}Bridge.listener=null;Bridge.pendingAccept=null;plog("LISTENER_START_FAILED");}
 }
-function projectOpened() { startServer(); }
+function projectOpened() { recoverPublishLease();startServer(); }
 function pumpFrom(source) {
     if(Bridge.stopped)return;
     if(source==="app")Bridge.appEntries++;else Bridge.timerEntries++;
@@ -211,6 +272,7 @@ function pumpFrom(source) {
     Bridge.lastUnityFrame=unityFrame;Bridge.pumping=true;
     try{
         Bridge.frame++;Bridge.updatedAtMs=now;
+        if(!Bridge.current && Bridge.publishRecovery && Bridge.publishRecovery.blocked && now>=(Bridge.nextRecoveryAt || 0)){Bridge.nextRecoveryAt=now+2000;recoverPublishLease();}
         // Each stage is isolated; no waits, normal stream Close or worker-thread JS callbacks.
         try{pumpWriters();}catch(error){plog("WRITE_PUMP_ERROR",error);}
         try{pumpAccepts();}catch(error){plog("ACCEPT_PUMP_ERROR",error);}
@@ -230,6 +292,7 @@ function loadConfig() {
 function boot() {
     plog("BOOT_STARTED");
     try{Config=loadConfig();}catch(_){plog("CONFIG_LOAD_FAILED");plog("BOOT_RETURNED");return;}
+    recoverPublishLease();
     acquireBackgroundHold();
     try{App.add_onUpdate(onUpdate);Bridge.subscribed=true;plog("UPDATE_SUBSCRIBED");}catch(_){plog("UPDATE_SUBSCRIBE_FAILED");}
     try{FairyGUI.Timers.inst.AddUpdate(onTimerUpdate);Bridge.timerSubscribed=true;plog("TIMER_SUBSCRIBED");}catch(error){plog("TIMER_SUBSCRIBE_FAILED",error);}
@@ -244,7 +307,11 @@ function onDestroy() {
     try{if(Bridge.subscribed)App.remove_onUpdate(onUpdate);}catch(_){}Bridge.subscribed=false;
     try{App.remove_onProjectOpened(projectOpened);}catch(_){}
     try{if(Bridge.timerSubscribed)FairyGUI.Timers.inst.Remove(onTimerUpdate);}catch(error){plog("TIMER_UNSUBSCRIBE_FAILED",error);}Bridge.timerSubscribed=false;
-    try{if(Bridge.current && Bridge.current.handler)detachPublish(Bridge.current);}catch(_){}
+    try{if(Bridge.current && Bridge.current.handler){
+        if(!Bridge.current.nativeStarted || publishFinished(Bridge.current))restorePublishMode(Bridge.current);
+        else plog("PUBLISH_ACTIVE_ON_UNLOAD"); // No cancellation or restoration guarantee during host/plugin teardown.
+        detachPublish(Bridge.current);
+    }}catch(_){plog("PUBLISH_UNLOAD_RESTORE_FAILED");}
     Bridge.readers.forEach(function(r){try{r.ctx.Response.Abort();}catch(_){}});
     Bridge.writers.forEach(function(w){try{w.ctx.Response.Abort();}catch(_){}});
     try{if(Bridge.listener)Bridge.listener.Close();}catch(_){}Bridge.listener=null;
