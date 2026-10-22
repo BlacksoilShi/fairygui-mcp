@@ -120,6 +120,8 @@ class StoreLock:
 
 class Backend:
     def __init__(self, config):
+        from service_binding import resolve
+        config = resolve(config, decode, BackendError)
         fields(config, ('contract', 'projectPath', 'port', 'token', 'receiptDir', 'timeoutSeconds', 'uploadRoots', 'browserPreview'),
                ('contract', 'projectPath', 'port', 'token', 'receiptDir'))
         if config['contract'] != CONTRACT:

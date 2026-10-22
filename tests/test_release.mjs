@@ -8,7 +8,7 @@ const root=fileURLToPath(new URL('../',import.meta.url));
 let checks=0; const check=fn=>{fn();checks++;};
 const pkg=JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8'));
 const plugin=JSON.parse(fs.readFileSync(path.join(root,'plugin/package.json'),'utf8'));
-check(()=>assert.equal(pkg.version,'0.7.0'));
+check(()=>assert.equal(pkg.version,'0.7.1'));
 check(()=>assert.equal(plugin.version,pkg.fgui.bridgePluginVersion));
 check(()=>assert(fs.readFileSync(path.join(root,'plugin/header.js'),'utf8').includes('var VERSION = "'+pkg.fgui.bridgePluginVersion+'";')));
 check(()=>assert(fs.readFileSync(path.join(root,'server.mjs'),'utf8').includes("version:'"+pkg.version+"'")));

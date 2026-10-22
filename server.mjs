@@ -325,7 +325,7 @@ async function handle(req){
       const offered=req.params?.protocolVersion;
       if(typeof offered!=='string')return failure(req.id,-32602,'protocolVersion required');
       const versions=['2025-06-18','2025-03-26','2024-11-05'];
-      send({jsonrpc:'2.0',id:req.id,result:{protocolVersion:versions.includes(offered)?offered:versions[0],capabilities:{tools:{}},serverInfo:{name:'fgui-local-agent-bridge',version:'0.7.0'},instructions:'Single explicitly configured project. Native editor tools and independent source_* tools are separate execution layers.'}});
+      send({jsonrpc:'2.0',id:req.id,result:{protocolVersion:versions.includes(offered)?offered:versions[0],capabilities:{tools:{}},serverInfo:{name:'fgui-local-agent-bridge',version:'0.7.1'},instructions:'Single explicitly configured project. Native editor tools and independent source_* tools are separate execution layers.'}});
     }else if(req.method==='tools/list')send({jsonrpc:'2.0',id:req.id,result:{tools:Object.entries(TOOLS).map(([name,t])=>({name,...t}))}});
     else if(req.method==='tools/call')await toolCall(req);
     else if(req.method==='ping')send({jsonrpc:'2.0',id:req.id,result:{}});

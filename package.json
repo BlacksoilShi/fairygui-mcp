@@ -1,6 +1,6 @@
 {
   "name": "fairygui-mcp",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "private": true,
   "description": "Project-scoped MCP bridge for the original FairyGUI editor with an optional reconstruction backend",
   "type": "module",

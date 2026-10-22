@@ -20,7 +20,7 @@ child.stdout.on('data',b=>{text+=b;let n;while((n=text.indexOf('\n'))>=0){const 
 const rpc=(method,params={})=>{const seq=++id;return {id:seq,promise:new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('RPC timeout')),5000);pending.set(seq,out=>{clearTimeout(timer);resolve(out);});child.stdin.write(JSON.stringify({jsonrpc:'2.0',id:seq,method,params})+'\n');})};};
 let checks=0;const check=fn=>{fn();checks++;};
 try{
-  const init=await rpc('initialize',{protocolVersion:'2025-06-18'}).promise;check(()=>assert.equal(init.result.serverInfo.version,'0.7.0'));
+  const init=await rpc('initialize',{protocolVersion:'2025-06-18'}).promise;check(()=>assert.equal(init.result.serverInfo.version,'0.7.1'));
   const list=await rpc('tools/list').promise;check(()=>assert.equal(list.result.tools.length,35));
   check(()=>assert(list.result.tools.every(x=>!x.name.startsWith('source_'))));
   check(()=>assert(list.result.tools.find(x=>x.name==='read_component').annotations.readOnlyHint));

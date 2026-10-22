@@ -21,7 +21,7 @@ for(const [name,extra,count] of profiles){
  child.stdout.on('data',b=>{text+=b;let n;while((n=text.indexOf('\n'))>=0){const line=text.slice(0,n);text=text.slice(n+1);const reply=JSON.parse(line);const pending=waiters.get(reply.id);if(pending){waiters.delete(reply.id);clearTimeout(pending.timer);pending.resolve(reply);}}});
  const rpc=(method,params={})=>new Promise((resolve,reject)=>{const seq=++id;const timer=setTimeout(()=>reject(Error('RPC timeout '+name)),10000);waiters.set(seq,{resolve,timer});child.stdin.write(JSON.stringify({jsonrpc:'2.0',id:seq,method,params})+'\n');});
  try{
-  const init=await rpc('initialize',{protocolVersion:'2025-06-18'});assert.equal(init.result.serverInfo.version,'0.7.0');
+  const init=await rpc('initialize',{protocolVersion:'2025-06-18'});assert.equal(init.result.serverInfo.version,'0.7.1');
   const list=await rpc('tools/list'),tools=list.result.tools,names=tools.map(t=>t.name);
   assert.equal(tools.length,count,name);assert.equal(new Set(names).size,count);
   assert(names.includes('bridge_diagnostics'));assert.equal(names.includes('source_operation_schema'),extra.sourceSchemas===true);
