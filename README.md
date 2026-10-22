@@ -1,7 +1,7 @@
-> 0.6.0 候选：通用独立后端、显式声音上传、分支发布及经双版本验证的中断恢复。
-> 服务端、helper、工程插件需成对更新。本候选未自动升级本机部署；范围与验证见 [0.6.0](docs/RELEASE_060.md)。
+# FairyGUI MCP 0.7.0
 
-# FairyGUI MCP
+新增原版连接诊断、只读操作模式查询和可维护的浏览器预览任务；预览依赖保持可选。MCP 版本为 0.7.0，原版插件保持字节一致的 0.6.0，不因客户端升级强制修改或重启原版编辑器。详见 [0.7.0 发布说明](docs/RELEASE_070.md)。
+
 
 通过工程插件和原版编辑器 API 操作 FairyGUI 的独立 MCP 工具。
 基于 [wingcd/fairygui-agent-bridge](https://github.com/wingcd/fairygui-agent-bridge)
@@ -22,8 +22,8 @@ MCP client → Node stdio server → authenticated 127.0.0.1 HTTP
 Optional source_* tools → explicitly configured external Python backend
 ```
 
-- 本版本默认 **34 个工具**：读取工程/组件、创建组件、插入/删除对象、改属性、保存、发布、日志、启动等。
-- 配置独立重建后端后增加 4 个 `source_*` 工具，共 **38 个**；通用模式另行显式启用声音上传后为 **39 个**。重建后端不在本仓库中，不是默认运行依赖。
+- 本版本默认 **35 个工具**：读取工程/组件、创建组件、插入/删除对象、改属性、保存、发布、日志、启动等。
+- 配置独立重建后端后增加 4 个 `source_*` 工具，共 **39 个**；通用模式的声音上传、模式查询、浏览器预览各显式增加 1 个工具，全开 **42 个**。重建编辑器/HTTP 服务不在本仓库中；可选的 HTTP 适配器随 source_backend/ 分发，不是原生模式的运行依赖。
 - 原生编辑和离线重建是两套执行层，工具说明中明确区分。
 - 已在 **Windows / FairyGUI Editor 6.1.4、6.0.5** 验证部分原生功能；逐项范围见 docs/NEXT.md，不是全部 API 的兼容性保证。
 - `refresh` 已验证外部资源导入；导入异步完成，应轮询读取。`screenshot` 已验证原生 UI 内容截图与独立 PNG 文件检查。
@@ -33,7 +33,7 @@ Optional source_* tools → explicitly configured external Python backend
 
 ## 安装
 
-依赖：Node.js 22+、Python 3.11+、已安装的 FairyGUI 编辑器。全部运行依赖来自标准库，无需 npm/pip 安装第三方包。
+依赖：Node.js 22+、Python 3.11+、已安装的 FairyGUI 编辑器。原生模式及通用 HTTP 适配器使用标准库；可选浏览器预览还需明确配置已安装的 Playwright 与浏览器，默认不安装、不下载。
 
 先使用工程副本试运行。将仓库、工程和私有运行目录分别放置，例如：
 
@@ -108,10 +108,10 @@ setup 生成随机令牌，不输出令牌、不覆盖已有配置、不修改�
 上面的配置保留旧版固定 Gesture/Main 适配。需要任意工程/组件选择时，在同一私有配置中另加
 `"sourceProtocol": "fgui-rebuild-http/1"`。此时四个固定工具被四个通用工具替换，
 不是叠加：`source_capabilities`、`source_state`、`source_command`、
-`source_receipt_read`，仍为 38 个工具。后端需单独安装并已启动；本仓库只分发客户端。
+`source_receipt_read`，基础模式仍为 39 个工具。编辑器 HTTP 服务需单独安装并已启动；本仓库同时分发可选的 HTTP 适配器。
 
 再显式设置 `"sourceUploads": true` 且后端配置导入根目录，才增加
-`source_sound_upload`（共 39 个）。上传不是原版编辑器导入，也不是音频解码验证。
+`source_sound_upload`（共 40 个）。上传不是原版编辑器导入，也不是音频解码验证。
 大结果通过有界快照或持久回执分页，调用方需按实际 nextOffset 拼接并核对 SHA256。
 迁移预览的短期 planToken 可通过 MCP 传回；它不是身份认证令牌，过期或历史回执不续期。
 
@@ -167,3 +167,9 @@ npm run build:plugin
 代码更新使用 Git 提交管理，回退到已验证提交后重新加载客户端。
 更新插件前保存备份；退出对应编辑器后恢复旧插件，再启动。
 原版编辑器二进制不在本仓库中，也不由本工具修补。
+
+## 完整离线测试
+
+运行 `npm test`，一次执行原生传输、Python helper、诊断、模式、预览、适配器及安装校验。Python 不在 PATH 时设置 `FGUI_TEST_PYTHON` 为绝对路径。测试不启动编辑器，不要求 Playwright；真实编辑器及浏览器全链路属于独立集成验收。
+
+可选后端配置和升级/回退见 [可选后端安装](docs/OPTIONAL_BACKEND_SETUP.md)。本包不包含重构编辑器源码、SDK 或任何用户工程。

@@ -1,6 +1,6 @@
 {
   "name": "fairygui-mcp",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "description": "Project-scoped MCP bridge for the original FairyGUI editor with an optional reconstruction backend",
   "type": "module",
@@ -11,7 +11,17 @@
   "scripts": {
     "start": "node server.mjs",
     "build:plugin": "node scripts/build-plugin.mjs",
-    "test": "node scripts/build-plugin.mjs --check && node tests/test_lines.mjs && node tests/test_revision.mjs && node tests/test_server_transport.mjs && node tests/test_standalone.mjs && node plugin/tests/offline.cjs && node tests/test_release.mjs",
-    "test:python": "python tests/test_helper.py && python tests/test_publish_owner.py && python tests/test_recovery_helper.py"
+    "test": "node scripts/test-all.mjs",
+    "test:python": "python tests/test_helper.py && python tests/test_publish_owner.py && python tests/test_recovery_helper.py",
+    "test:diagnostics": "python tests/test_diagnostics.py && node tests/test_diagnostics_stdio.mjs",
+    "test:schema": "node tests/test_schema_config.mjs && python tests/test_schema_helper_config.py",
+    "test:core": "node scripts/build-plugin.mjs --check && node tests/test_lines.mjs && node tests/test_revision.mjs && node tests/test_server_transport.mjs && node tests/test_standalone.mjs && node plugin/tests/offline.cjs && node tests/test_release.mjs",
+    "test:all": "node scripts/test-all.mjs",
+    "test:preview": "node tests/test_preview_config.mjs && python tests/test_preview_helper_config.py",
+    "test:adapter": "python -m unittest discover -s source_backend/tests -p \"test_*.py\" && node source_backend/tests/test_browser_preview.cjs"
+  },
+  "fgui": {
+    "bridgePluginVersion": "0.6.0",
+    "sourceBackendProtocol": "fgui-rebuild-http/1"
   }
 }

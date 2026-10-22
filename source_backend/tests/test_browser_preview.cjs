@@ -1,0 +1,21 @@
+'use strict';
+const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+const {validateConfig,validateRequest,PreviewError}=require('../browser_preview.cjs');
+const cfg={origin:'http://127.0.0.1:12345',token:'a'.repeat(32),session:'s'.repeat(32),revision:0,projectFile:__filename,playwrightModule:__dirname,browserExecutable:__filename,timeoutMs:10000};
+let checks=0;function ok(f){f();checks++;}function bad(f,code){assert.throws(f,e=>e instanceof PreviewError&&e.code===code);checks++;}
+ok(()=>assert.deepEqual(validateConfig(cfg),cfg));
+for(const origin of ['https://127.0.0.1:4','http://localhost:4','http://127.0.0.1:65536','http://127.0.0.1:4/','http://127.0.0.1:4/#token=x','http://user@127.0.0.1:4','http://example.com:4'])bad(()=>validateConfig({...cfg,origin}),'PREVIEW_ORIGIN');
+for(const revision of [true,-1,1.1,NaN])bad(()=>validateConfig({...cfg,revision}),'PREVIEW_IDENTITY');
+for(const session of [null,1234567890123456,'short','s'.repeat(129)])bad(()=>validateConfig({...cfg,session}),'PREVIEW_IDENTITY');
+for(const timeoutMs of [999,120001,1.5,true])bad(()=>validateConfig({...cfg,timeoutMs}),'PREVIEW_DEADLINE');
+bad(()=>validateConfig({...cfg,extra:1}),'PREVIEW_CONFIG');
+bad(()=>validateConfig({...cfg,token:'short'}),'PREVIEW_IDENTITY');
+const r={package:'测试包',component:'case0000',args:{events:[],max_steps:100000}};
+ok(()=>assert.deepEqual(validateRequest(r),r));
+for(const extra of ['url','script','group_profile','text_layout_profile'])bad(()=>validateRequest({...r,args:{[extra]:''}}),'PREVIEW_CONFIG');
+bad(()=>validateRequest({...r,component:'a\nb'}),'PREVIEW_SELECTOR');
+bad(()=>validateRequest({...r,args:{events:Infinity}}),'PREVIEW_ARGUMENTS');
+bad(()=>validateRequest({...r,args:{events:'x'.repeat(512*1024)}}),'PREVIEW_INPUT_LIMIT');
+let deep=[];for(let i=0;i<66;i++)deep=[deep];bad(()=>validateRequest({...r,args:{events:deep}}),'PREVIEW_INPUT_LIMIT');
+bad(()=>validateRequest({...r,args:{events:undefined}}),'PREVIEW_ARGUMENTS');
+console.log(JSON.stringify({passed:true,checks,scope:'pure validation, no browser dependency loaded'}));

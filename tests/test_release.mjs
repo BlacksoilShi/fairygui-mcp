@@ -8,9 +8,9 @@ const root=fileURLToPath(new URL('../',import.meta.url));
 let checks=0; const check=fn=>{fn();checks++;};
 const pkg=JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8'));
 const plugin=JSON.parse(fs.readFileSync(path.join(root,'plugin/package.json'),'utf8'));
-check(()=>assert.equal(pkg.version,'0.6.0'));
-check(()=>assert.equal(plugin.version,pkg.version));
-check(()=>assert(fs.readFileSync(path.join(root,'plugin/header.js'),'utf8').includes('var VERSION = "'+pkg.version+'";')));
+check(()=>assert.equal(pkg.version,'0.7.0'));
+check(()=>assert.equal(plugin.version,pkg.fgui.bridgePluginVersion));
+check(()=>assert(fs.readFileSync(path.join(root,'plugin/header.js'),'utf8').includes('var VERSION = "'+pkg.fgui.bridgePluginVersion+'";')));
 check(()=>assert(fs.readFileSync(path.join(root,'server.mjs'),'utf8').includes("version:'"+pkg.version+"'")));
 const omitted=new Set(['tmp','__pycache__','.git','node_modules']);
 function files(dir){return fs.readdirSync(dir,{withFileTypes:true}).flatMap(e=>omitted.has(e.name)?[]:e.isDirectory()?files(path.join(dir,e.name)):[path.join(dir,e.name)]);}

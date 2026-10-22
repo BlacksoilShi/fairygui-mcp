@@ -106,7 +106,7 @@ class Helper:
         self.work = self.config_path.parent
         self.cfg = read_json(self.config_path)
         required = {'projectPath', 'editorPath', 'python', 'host', 'port', 'token', 'publishDir', 'screenshotDir'}
-        optional = {'node', 'sourceProject', 'sourceHelper', 'sourceConfig', 'sourceProtocol', 'sourceUploads'}
+        optional = {'node', 'sourceProject', 'sourceHelper', 'sourceConfig', 'sourceProtocol', 'sourceUploads', 'sourceSchemas', 'sourcePreviews'}
         c = self.cfg
         if not isinstance(c, dict) or not required <= c.keys() or c.keys() - required - optional:
             raise ValueError('Invalid configuration fields')
@@ -118,6 +118,10 @@ class Helper:
             raise ValueError('Explicit matching independent backend required')
         if 'sourceUploads' in c and (type(c['sourceUploads']) is not bool or c['sourceUploads'] and c.get('sourceProtocol') != 'fgui-rebuild-http/1'):
             raise ValueError('Explicit matching upload backend required')
+        if 'sourceSchemas' in c and (type(c['sourceSchemas']) is not bool or c['sourceSchemas'] and c.get('sourceProtocol') != 'fgui-rebuild-http/1'):
+            raise ValueError('Explicit matching schema backend required')
+        if 'sourcePreviews' in c and (type(c['sourcePreviews']) is not bool or c['sourcePreviews'] and c.get('sourceProtocol') != 'fgui-rebuild-http/1'):
+            raise ValueError('Explicit matching preview backend required')
         for key in required - {'host', 'port', 'token'}:
             if not isinstance(c[key], str) or not Path(c[key]).is_absolute():
                 raise ValueError('Absolute configured paths required')
@@ -154,6 +158,10 @@ class Helper:
             return data
         except (OSError, ValueError, TypeError, KeyError):
             return None
+
+    def diagnose(self):
+        from diagnostics import diagnose
+        return diagnose(self)
 
     def install(self):
         dest = within(self.project/'plugins/fgui-agent-bridge-custom', self.project)
@@ -448,7 +456,7 @@ def main():
         if not isinstance(args, dict):
             raise ValueError('Arguments must be an object')
         command = sys.argv[1]
-        if command not in {'start', 'install', 'recover_publish', 'verify_publish', 'verify_screenshot'} or (command not in {'verify_publish','verify_screenshot'} and args):
+        if command not in {'start', 'install', 'diagnose', 'recover_publish', 'verify_publish', 'verify_screenshot'} or (command not in {'verify_publish','verify_screenshot'} and args):
             raise ValueError('Unknown command or arguments')
         helper = Helper()
         result = getattr(helper, command)(args) if command in {'verify_publish','verify_screenshot'} else getattr(helper, command)()

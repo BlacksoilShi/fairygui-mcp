@@ -16,3 +16,9 @@ queued cancellation, conservative tool annotations, and portable offline tests.
 
 No original editor program, Unity runtime, SDK, source reconstruction, analysis
 database, reverse-engineering dump or third-party project asset is distributed.
+
+Version 0.7.0 adds locally developed diagnostics, schema discovery, and optional
+HTTP/browser-preview adapter modules under source_backend/. These are client-side
+integration code, not recovered proprietary editor code. The native plugin remains
+the exact 0.6.0 implementation; server and plugin versions are tracked separately.
+Playwright and a browser are optional external installations and are not bundled.

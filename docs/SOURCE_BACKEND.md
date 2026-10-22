@@ -1,15 +1,15 @@
 # Optional external reconstruction backend: fgui-rebuild-http/1
 
-This repository distributes only the MCP client, not backend.py, an editor or an SDK.
-The separately configured backend must implement this contract. Native and source layers
+Version 0.7.0 distributes the optional source_backend/backend.py HTTP adapter,
+but no editor service or SDK. The separately configured service implements this contract. Native and source layers
 remain independent. Optional upload policy is in [SOUND_UPLOAD.md](SOUND_UPLOAD.md).
 
 ## Execution and tool catalogues
 
-The MCP `server.mjs` preserves34 native tools. Without a source backend its
+The MCP `server.mjs` preserves35 native/local diagnostic tools. Without a source backend its
 catalogue is unchanged. Legacy source configuration still exposes the four fixed
 Gesture/Main tools. Explicit `sourceProtocol: "fgui-rebuild-http/1"` instead exposes these
-four generic tools (38 total, not42):
+four generic tools (39 total, not43):
 
 * `source_capabilities({})`: actual backend operations, limits, session and revision.
 * `source_state({package?,component?,snapshot?})`: arbitrary name/ID selection. Null/omitted

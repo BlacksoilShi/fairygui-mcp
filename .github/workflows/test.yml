@@ -14,6 +14,3 @@ jobs:
         with:
           python-version: '3.12'
       - run: npm test
-      - run: python tests/test_helper.py
-      - run: python tests/test_publish_owner.py
-      - run: python tests/test_recovery_helper.py
